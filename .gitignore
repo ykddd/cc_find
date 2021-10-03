@@ -1,0 +1,8 @@
+./data/scale1
+./data/scale10
+./data/*.zip
+
+./src/cmake-build-debug
+./src/.idea
+./DS_Store
+./.idea
