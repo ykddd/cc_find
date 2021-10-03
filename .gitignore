@@ -1,8 +1,11 @@
-./data/scale1
-./data/scale10
-./data/*.zip
+/data/scale1/
+/data/scale10/
+/data/scale10/
+/data/*.zip
 
-./src/cmake-build-debug
-./src/.idea
-./DS_Store
-./.idea
+/src/cmake-build-debug
+/src/.idea
+.DS_Store
+/src/build/
+/*.zip
+.idea

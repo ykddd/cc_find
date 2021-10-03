@@ -55,7 +55,6 @@ void CycleDetecter::SortTransfer() {
                           }
                       });
 //    tbb::parallel_sort(forward_trans, forward_trans + edge_num, Transfer::cmp_transfer_ts);
-    std::cout << "here" << std::endl;
 //    tbb::parallel_sort(forward_trans, forward_trans + edge_num, Transfer::cmp_transfer);
 //    std::sort(forward_trans, forward_trans + edge_num, Transfer::cmp_transfer);
 //    std::sort(backward_trans, backward_trans + edge_num, Transfer::cmp_transfer);
@@ -219,14 +218,14 @@ void CycleDetecter::FindCycle() {
 //        native_six_for(i);
 //    }
 
-    std::cout << cycyle_num << std::endl;
+    std::cout << "cycle total num: " << cycyle_num << std::endl;
 }
 
 void CycleDetecter::native_six_for(uint32_t cur_node) {
     char local_res[256];
-    if (cur_node % 10000 == 0) {
-        std::cout << "cur node: " << cur_node << std::endl;
-    }
+//    if (cur_node % 10000 == 0) {
+//        std::cout << "cur node: " << cur_node << std::endl;
+//    }
     uint32_t node_1, node_2, node_3, node_4, node_5;
     uint32_t j, k, m, n, u;
     std::array<uint32_t, 6> res_index{cur_node};
@@ -362,7 +361,6 @@ void CycleDetecter::ExportResImpl(uint32_t idx, char *tmp_buffer, uint32_t &buf_
 void CycleDetecter::ExportResToFile() {
     PerfThis(__FUNCTION__);
     auto res_len = res_buff_offset.load();
-    std::cout << "max_buf_id" << max_buf_id << std::endl;
     int fd = open(output_file, O_RDWR | O_CREAT | O_TRUNC, 0666);
 
     assert(fd >= 0);
