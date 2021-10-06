@@ -2,7 +2,8 @@
 /data/scale10/
 /data/scale10/
 /data/*.zip
-
+/my
+/my.tar.gz
 /src/cmake-build-debug
 /src/.idea
 .DS_Store

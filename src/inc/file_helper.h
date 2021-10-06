@@ -28,9 +28,10 @@ public:
 
     static uint32_t GetEdgeNum(char *data, off_t file_len);
 
-    static void GetTransferFromFile(const char *trans_data, off_t file_len,
+    static void GetTransferFromFile(const char *trans_data,
+                                    off_t file_len,
                                     uint32_t edeg_num,
-                                    Transfer *forward, Transfer *backward,
+                                    Transfer *forward,
                                     IdMapType &id_map);
 
 

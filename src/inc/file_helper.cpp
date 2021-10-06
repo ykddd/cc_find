@@ -9,6 +9,7 @@
 #include "tbb/parallel_for_each.h"
 #include "tbb/task_scheduler_init.h"
 #include "tbb/enumerable_thread_specific.h"
+#include "tbb/concurrent_priority_queue.h"
 
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -84,7 +85,6 @@ namespace {
 uint32_t FileHelper::GetAccountNum(char *data, off_t file_len) {
     PerfThis(__FUNCTION__);
     uint32_t account_num;
-//    tbb::task_scheduler_init schedulerInit(16);
 
     // parallel for
     typedef tbb::enumerable_thread_specific<uint32_t> CounterType;
@@ -148,32 +148,29 @@ uint32_t FileHelper::GetEdgeNum(char *data, off_t file_len) {
     return edge_num;
 }
 
-void FileHelper::GetTransferFromFile(const char *trans_data, off_t file_len,
+void FileHelper::GetTransferFromFile(const char *trans_data,
+                                     off_t file_len,
                                      uint32_t edeg_num,
-                                     Transfer *forward, Transfer *backward,
+                                     Transfer *forward,
                                      IdMapType &id_map) {
     PerfThis(__FUNCTION__);
-//    typedef tbb::enumerable_thread_specific<std::vector<Transfer>> CounterType;
-//    CounterType counter;
+//    tbb::atomic<uint32_t> edge_index{0};
 //    tbb::parallel_for(tbb::blocked_range<off_t>(0, file_len),
 //                      [&](tbb::blocked_range<off_t> r) {
-//                          CounterType::reference my_counter = counter.local();
-////                          my_counter.second.reserve(r.size() / 20);
-////                          std::cout << my_counter.second.capacity() << std::endl;
 //                          uint64_t from;
 //                          uint64_t to;
 //                          uint64_t time_stamp;
 //                          uint32_t amount;
 //
 //                          auto beg = r.begin();
-//                          while (beg != 0 && trans_data[beg] != lf) {
+//                          while (trans_data[beg] != lf && beg != 0) {
 //                              ++beg;
 //                          }
 //                          if (beg != 0) {
 //                              ++beg;
 //                          }
 //                          auto end = r.end();
-//                          while (end != file_len && trans_data[end] != lf) {
+//                          while (trans_data[end] != lf && end != file_len ) {
 //                              ++end;
 //                          }
 //                          auto data = trans_data + beg;
@@ -189,30 +186,19 @@ void FileHelper::GetTransferFromFile(const char *trans_data, off_t file_len,
 //                                  amount = (data[i] - '0') + 10 * amount;
 //                                  ++i;
 //                              }
-////                              my_counter.emplace_back(id_map[from], id_map[to], time_stamp, amount);
-//                              my_counter.emplace_back(from, to, time_stamp, amount);
-////                              std::cout << from << "," << to << "," << time_stamp << "," << amount << std::endl;
+//                              uint32_t cur_index = edge_index.fetch_and_add(1);
+//                              forward[cur_index] = Transfer(id_map[from], id_map[to], time_stamp, amount);
 //                          }
 //                      }
 //    );
-//
-//    size_t off_set = 0;
-//    size_t total = 0;
-//    for (auto &item: counter) {
-//        memcpy(forward + off_set, item.data(), sizeof(Transfer) * item.size());
-//        off_set += item.size();
-//        std::cout << item.size() << std::endl;
-//        total += item.size();
-//    }
 //    tbb::parallel_sort(forward, forward+edeg_num, Transfer::cmp_transfer);
-//    std::cout << total << std::endl;
+//    return;
 
     auto *beg = trans_data;
     uint64_t from;
     uint64_t to;
     uint64_t time_stamp;
     uint32_t amount;
-    std::cout << "here" << std::endl;
     uint64_t prev_id;
     uint32_t index = 0;
     GET_UINT64(prev_id, trans_data, comma);
@@ -235,7 +221,6 @@ void FileHelper::GetTransferFromFile(const char *trans_data, off_t file_len,
             ++index;
             prev_id = from;
         }
-//        forward[i] = Transfer(amount, index, id_map[to], time_stamp);
         forward[i] = Transfer(amount, index, to, time_stamp);
     }
 

@@ -4,8 +4,11 @@
 
 #ifndef CYCLEDETECT_STRING_UTILS_H
 #define CYCLEDETECT_STRING_UTILS_H
+#include "perf_utils.h"
+
+#include <cstdint>
+
 namespace StrUtils{
-#include <stdint.h>
 
 #if 0
     // 1 char at a time
@@ -58,6 +61,7 @@ namespace StrUtils{
 #define LG(F) (u<100 ? u<10 ? F(0) : F(1) : u<1000000 ? u<10000 ? u<1000 ? F(2) : F(3) : u<100000 ? F(4) : F(5) : u<100000000 ? u<10000000 ? F(6) : F(7) : u<1000000000 ? F(8) : F(9))
     uint16_t u64toa_jeaiii(uint64_t n, char* b)
     {
+//        PerfThis(__FUNCTION__);
         uint16_t length = 0;
         uint32_t u;
         uint64_t t;

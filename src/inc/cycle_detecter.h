@@ -27,11 +27,35 @@ public:
         assert(account_fd >= 0);
         account_file_len = lseek(account_fd, 0, SEEK_END);
         account_data = (char *) mmap(nullptr, account_file_len, PROT_READ, MAP_PRIVATE, account_fd, 0);
+        close(account_fd);
 
         auto trans_fd = open(trans_file, O_RDONLY);
         assert(trans_fd >= 0);
         trans_file_len = lseek(trans_fd, 0, SEEK_END);
         trans_data = (char *) mmap(nullptr, trans_file_len, PROT_READ, MAP_PRIVATE, trans_fd, 0);
+        close(trans_fd);
+    }
+
+    ~CycleDetecter(){
+        munmap(account_data, account_file_len);
+        munmap(trans_data, trans_file_len);
+
+        delete []account;
+        delete []forward_trans;
+
+        delete []forward_src;
+        delete []forward_dst;
+        delete []forward_value;
+        delete []forward_ts;
+        delete []forward_edge_index;
+
+//        delete []backward_src;
+//        delete []backward_dst;
+//        delete []backward_value;
+//        delete []backward_ts;
+//        delete []backward_edge_index;
+
+        delete []res_data;
     }
 
     void Run();
@@ -39,16 +63,22 @@ public:
 private:
     void SortTransfer();
 
+    void SortBackTransfer();
+
     void FlattenTrans();
+
+    void FlattenBackTrans();
 
     void MakeEdgeIndex();
 
+    void MakeBackEdgeIndex();
+
     void FindCycle();
 
-    void native_six_for(uint32_t cur_node);
+    void NativeSixFor(uint32_t cur_node);
 
     void ExportRes(const std::array<uint32_t, 6> &res_index,
-                   const uint32_t cycle_len,
+                   uint32_t cycle_len,
                    char *tmp_buffer);
 
     void ExportResImpl(uint32_t idx, char *tmp_buffer, uint32_t &buf_idx);
@@ -74,18 +104,25 @@ private:
     uint64_t *account = nullptr;
 
     Transfer *forward_trans = nullptr;
-    Transfer *backward_trans = nullptr;
 
     uint32_t *forward_src = nullptr;
     uint32_t *forward_dst = nullptr;
     uint32_t *forward_value = nullptr;
     int64_t *forward_ts = nullptr;
-
-
     uint32_t *forward_edge_index = nullptr;
 
+    uint32_t *backward_src = nullptr;
+    uint32_t *backward_dst = nullptr;
+    uint32_t *backward_value = nullptr;
+    int64_t *backward_ts = nullptr;
+    uint32_t *backward_edge_index = nullptr;
 
-    tbb::atomic<uint32_t> cycyle_num{0};
+
+    uint32_t cycyle_num;
+    tbb::atomic<uint32_t> cycyle_num_len_3{0};
+    tbb::atomic<uint32_t> cycyle_num_len_4{0};
+    tbb::atomic<uint32_t> cycyle_num_len_5{0};
+    tbb::atomic<uint32_t> cycyle_num_len_6{0};
 
     char *res_data = nullptr;
     tbb::atomic<off_t> res_buff_offset{0};
