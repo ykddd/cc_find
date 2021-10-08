@@ -32,12 +32,12 @@ public:
 
     static int cmp_back_trans(const Transfer &lhs, const Transfer &rhs) {
         return (lhs.dst_id < rhs.dst_id) ||
-               (lhs.dst_id == rhs.dst_id && lhs.time_stamp > rhs.time_stamp);
+               (lhs.dst_id == rhs.dst_id && lhs.time_stamp < rhs.time_stamp);
     }
 
     AmtType amount;
     IDType src_id;
-    uint64_t dst_id;
+    uint32_t dst_id;
     TSType time_stamp;
 };
 

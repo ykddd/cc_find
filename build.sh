@@ -2,8 +2,10 @@ MYDIR=`pwd`/src
 cd $MYDIR/third_party/tbb
 echo $MYDIR
 pwd
+mv build/ build_bak/
+mkdir build
+cp build_bak/version_string.ver.in build/
 cd build
-make clean
 cmake ..
 make -j
 

@@ -18,9 +18,25 @@
 #include <unordered_map>
 #include <array>
 
+struct BackRec {
+    BackRec() = default;
+
+    BackRec(uint32_t node, uint32_t b1, uint32_t b2, uint32_t b3) :
+            back_node(node), b1_idx(b1), b2_idx(b2), b3_idx(b3) {};
+
+    static bool CmpBackRec(const BackRec &lhs, const BackRec &rhs) {
+        return lhs.back_node < rhs.back_node;
+    }
+
+    uint32_t back_node;
+    uint32_t b1_idx;
+    uint32_t b2_idx;
+    uint32_t b3_idx;
+};
+
 class CycleDetecter {
 public:
-    CycleDetecter(char *account_file, char *trans_file, char* res_file) :
+    CycleDetecter(char *account_file, char *trans_file, char *res_file) :
             account_file(account_file), trans_file(trans_file), output_file(res_file) {
         PerfThis("CycleDetecter construciton");
         auto account_fd = open(account_file, O_RDONLY);
@@ -36,18 +52,18 @@ public:
         close(trans_fd);
     }
 
-    ~CycleDetecter(){
+    ~CycleDetecter() {
         munmap(account_data, account_file_len);
         munmap(trans_data, trans_file_len);
 
-        delete []account;
-        delete []forward_trans;
+        delete[]account;
+        delete[]forward_trans;
 
-        delete []forward_src;
-        delete []forward_dst;
-        delete []forward_value;
-        delete []forward_ts;
-        delete []forward_edge_index;
+        delete[]forward_src;
+        delete[]forward_dst;
+        delete[]forward_value;
+        delete[]forward_ts;
+        delete[]forward_edge_index;
 
 //        delete []backward_src;
 //        delete []backward_dst;
@@ -55,7 +71,7 @@ public:
 //        delete []backward_ts;
 //        delete []backward_edge_index;
 
-        delete []res_data;
+        delete[]res_data;
     }
 
     void Run();
@@ -77,11 +93,19 @@ private:
 
     void NativeSixFor(uint32_t cur_node);
 
-    void ExportRes(const std::array<uint32_t, 6> &res_index,
-                   uint32_t cycle_len,
-                   char *tmp_buffer);
+    void BackFindThree(uint32_t cur_node, BackRec *back_rec,
+                       bool *in_back, uint32_t *back_record_index, uint32_t &back_recode_num);
 
-    void ExportResImpl(uint32_t idx, char *tmp_buffer, uint32_t &buf_idx);
+    void ForwardFindThree(uint32_t cur_node, BackRec *back_rec, bool *in_back, uint32_t *back_record_index);
+
+    void ExportRes(const std::array<uint32_t, 7> &res_index,
+                   uint32_t cycle_len, char *tmp_buffer);
+
+    void ExportResImpl(const std::array<uint32_t, 7> &res_index, char *tmp_buffer,
+                       uint32_t &buf_idx, uint32_t cur_idx);
+
+    void ExportResWithBackRec(const std::array<uint32_t, 7> &res_index,
+                              uint32_t cycle_len, char *tmp_buffer);
 
     void ExportResToFile();
 

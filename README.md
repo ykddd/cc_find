@@ -8,7 +8,7 @@ CYCLE_DETECT_2021BDCI
 |  :----  | :----  | :----  |
 | account_num  | 998140 | 7200880 |
 | edge_num  | 28940477 | 286818003 |
-| single_line_max_len  | 223 | 228 |
+| single_line_max_len  | 263 | 263 |
 | cycle_len  | 63897 | 335620 |
 | cycle_len_3  | 6382 | 16775 |
 | cycle_len_4  | 10454 | 37064 |
