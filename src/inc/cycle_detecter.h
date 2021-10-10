@@ -40,13 +40,11 @@ public:
             account_file(account_file), trans_file(trans_file), output_file(res_file) {
         PerfThis("CycleDetecter construciton");
         auto account_fd = open(account_file, O_RDONLY);
-        assert(account_fd >= 0);
         account_file_len = lseek(account_fd, 0, SEEK_END);
         account_data = (char *) mmap(nullptr, account_file_len, PROT_READ, MAP_PRIVATE, account_fd, 0);
         close(account_fd);
 
         auto trans_fd = open(trans_file, O_RDONLY);
-        assert(trans_fd >= 0);
         trans_file_len = lseek(trans_fd, 0, SEEK_END);
         trans_data = (char *) mmap(nullptr, trans_file_len, PROT_READ, MAP_PRIVATE, trans_fd, 0);
         close(trans_fd);
@@ -91,12 +89,14 @@ private:
 
     void FindCycle();
 
-    void NativeSixFor(uint32_t cur_node);
+//    void NativeSixFor(uint32_t cur_node);
 
     void BackFindThree(uint32_t cur_node, BackRec *back_rec,
                        bool *in_back, uint32_t *back_record_index, uint32_t &back_recode_num);
 
-    void ForwardFindThree(uint32_t cur_node, BackRec *back_rec, bool *in_back, uint32_t *back_record_index);
+    void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
+                          bool *in_back, uint32_t *back_record_index,
+                          char* local_res);
 
     void ExportRes(const std::array<uint32_t, 7> &res_index,
                    uint32_t cycle_len, char *tmp_buffer);

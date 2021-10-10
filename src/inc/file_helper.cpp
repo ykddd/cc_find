@@ -20,6 +20,7 @@
 #include <fstream>
 #include <numeric>
 #include <vector>
+#include <thread>
 
 #define GET_UINT64(num, cur, deli)            \
     do {                                      \
@@ -139,85 +140,225 @@ uint32_t FileHelper::GetEdgeNum(char *data, off_t file_len) {
     return edge_num;
 }
 
-void FileHelper::GetTransferFromFile(const char *trans_data,
-                                     off_t file_len,
-                                     uint32_t edge_num,
-                                     Transfer *forward,
-                                     IdMapType &id_map) {
+Transfer *FileHelper::GetTransferFromFile(const char *trans_data,
+                                          off_t file_len,
+                                          uint32_t &edge_num,
+                                          Transfer *forward,
+                                          IdMapType &id_map) {
     PerfThis(__FUNCTION__);
-    tbb::atomic<uint32_t> edge_index{0};
-    tbb::parallel_for(tbb::blocked_range<off_t>(0, file_len),
-                      [&](tbb::blocked_range<off_t> r) {
-                          uint64_t from;
-                          uint64_t to;
-                          uint64_t time_stamp;
-                          uint32_t amount;
-
-                          auto beg = r.begin();
-                          while (trans_data[beg] != lf && beg != 0) {
-                              ++beg;
-                          }
-                          if (beg != 0) {
-                              ++beg;
-                          }
-                          auto end = r.end();
-                          while (trans_data[end] != lf && end != file_len) {
-                              ++end;
-                          }
-                          auto data = trans_data + beg;
-                          for (off_t i = 0; i < end - beg; ++i) {
-                              GET_UINT64_V2(from, i, comma, data);
-                              GET_UINT64_V2(to, i, comma, data);
-                              GET_UINT64_V2(time_stamp, i, comma, data);
-                              amount = 0;
-                              while (data[i] != lf) {
-                                  if (data[i] == dot) {
-                                      ++i;
-                                  }
-                                  amount = (data[i] - '0') + 10 * amount;
-                                  ++i;
-                              }
-                              uint32_t cur_index = edge_index.fetch_and_add(1);
-                              forward[cur_index] = Transfer(amount, id_map[from], id_map[to], time_stamp);
-                          }
-                      }
-    );
-    return;
-
-    auto *beg = trans_data;
-    uint64_t from;
-    uint64_t to;
-    uint64_t time_stamp;
-    uint32_t amount;
-    uint64_t prev_id;
-    uint32_t index = 0;
-    GET_UINT64(prev_id, trans_data, comma);
-
-    for (uint32_t i = 0; i < edge_num; ++i) {
-        GET_UINT64(from, beg, comma);
-        GET_UINT64(to, beg, comma);
-        GET_UINT64(time_stamp, beg, comma);
-
-        amount = 0;
-        while (*beg != lf) {
-            if (*beg == dot) {
+    const size_t thread_num = tbb::task_scheduler_init::default_num_threads();
+    std::vector<std::thread> threads;
+    auto line_counter = new uint32_t[thread_num + 1]{};
+    auto data = trans_data;
+    auto get_line_num = [&](off_t beg, off_t end, size_t tid) {
+        if (tid != 0) {
+            while (data[beg] != lf) {
                 ++beg;
             }
-            amount = (*beg - '0') + 10 * amount;
             ++beg;
+        } else {
+            beg = 0;
         }
-        ++beg;
-        if (from != prev_id) {
-            ++index;
-            prev_id = from;
+        if (tid != thread_num - 1) {
+            while (data[end] != lf) {
+                ++end;
+            }
+            ++end;
+        } else {
+            end = file_len;
         }
-        forward[i] = Transfer(amount, index, to, time_stamp);
+        for (off_t i = beg; i < end; ++i) {
+            if (data[i] == lf) {
+                ++line_counter[tid + 1];
+                i += 28;
+            }
+        }
+    };
+    for (size_t i = 0; i < thread_num; ++i) {
+        threads.emplace_back(get_line_num, file_len / thread_num * i, file_len / thread_num * (i + 1), i);
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    for (size_t i = 0; i < thread_num; ++i) {
+        line_counter[i + 1] += line_counter[i];
     }
 
-    tbb::parallel_for(tbb::blocked_range<off_t>(0, edge_num),
-                      [&](tbb::blocked_range<off_t> r) {
-                          for (off_t i = r.begin(); i < r.end(); ++i) {
-                              forward[i].dst_id = id_map[forward[i].dst_id];
-                          }
-                      });
+
+    edge_num = line_counter[thread_num];
+    forward = new Transfer[edge_num];
+    std::cout << "edge_num: " << edge_num << std::endl;
+
+    PerfUtils::PerfRaii perf_raii{"get transfers"};
+    auto get_transfer = [&](off_t beg, off_t end, size_t tid) {
+        if (tid != 0) {
+            while (data[beg] != lf) {
+                ++beg;
+            }
+            ++beg;
+        } else {
+            beg = 0;
+        }
+        if (tid != thread_num - 1) {
+            while (data[end] != lf) {
+                ++end;
+            }
+            ++end;
+        } else {
+            end = file_len;
+        }
+        uint64_t from;
+        uint64_t to;
+        uint64_t time_stamp;
+        uint32_t amount;
+        uint32_t cur_line_num = 0;
+        uint64_t pre_from;
+        off_t i = beg;
+        GET_UINT64_V2(pre_from, i, comma, data);
+        uint32_t mapped_from = id_map[pre_from];
+
+        for (i = beg; i < end; ++i) {
+            GET_UINT64_V2(from, i, comma, data);
+            GET_UINT64_V2(to, i, comma, data);
+            GET_UINT64_V2(time_stamp, i, comma, data);
+            amount = 0;
+            while (data[i] != lf) {
+                if (data[i] == dot) {
+                    ++i;
+                }
+                amount = (data[i] - '0') + 10 * amount;
+                ++i;
+            }
+            if (pre_from != from) {
+                mapped_from = id_map[from];
+                pre_from = from;
+            }
+            forward[line_counter[tid] + cur_line_num] = Transfer(amount, mapped_from, id_map[to], time_stamp);
+            ++cur_line_num;
+        }
+    };
+
+    threads.clear();
+    for (size_t i = 0; i < thread_num; ++i) {
+        threads.emplace_back(get_transfer, file_len / thread_num * i, file_len / thread_num * (i + 1), i);
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+    std::cout << forward[edge_num - 1].time_stamp << " " << forward[edge_num - 1].amount << std::endl;
+    return forward;
+//    for(auto&x : id_map) {
+//        std::cout << x.first << " " << x.second << std::endl;
+//    }
+//    typedef tbb::enumerable_thread_specific<std::vector<uint64_t>> CounterType;
+//    CounterType counter{7200880};
+//
+//    tbb::parallel_for(tbb::blocked_range<off_t>(0, file_len),
+//                      [&](tbb::blocked_range<off_t> r) {
+//                          uint64_t from;
+//                          uint64_t to;
+//                          CounterType::reference my_counter = counter.local();
+//                          auto beg = r.begin();
+//                          while (trans_data[beg] != lf && beg != 0) {
+//                              ++beg;
+//                          }
+//                          if (beg != 0) {
+//                              ++beg;
+//                          }
+//                          auto end = r.end();
+//                          while (trans_data[end] != lf && end != file_len) {
+//                              ++end;
+//                          }
+//                          auto data = trans_data + beg;
+//                          for (off_t i = 0; i < end - beg; ++i) {
+//                              GET_UINT64_V2(from, i, comma, data);
+//                              GET_UINT64_V2(to, i, comma, data);
+//                              while (data[i] != lf) {
+//                                  ++i;
+//                              }
+//                              my_counter[id_map[from]]++;
+//
+//                          }
+//                      }
+//    );
+//    int total = 0;
+//    for(auto& item:counter) {
+//        std::cout << item[0] << std::endl;
+//        total += item[0];
+//    }
+//    std::cout << total << std::endl;
+//    tbb::atomic<uint32_t> edge_index{0};
+//    tbb::parallel_for(tbb::blocked_range<off_t>(0, file_len),
+//                      [&](tbb::blocked_range<off_t> r) {
+//                          uint64_t from;
+//                          uint64_t to;
+//                          uint64_t time_stamp;
+//                          uint32_t amount;
+//
+//                          auto beg = r.begin();
+//                          while (trans_data[beg] != lf && beg != 0) {
+//                              ++beg;
+//                          }
+//                          if (beg != 0) {
+//                              ++beg;
+//                          }
+//                          auto end = r.end();
+//                          while (trans_data[end] != lf && end != file_len) {
+//                              ++end;
+//                          }
+//                          auto data = trans_data + beg;
+//                          for (off_t i = 0; i < end - beg; ++i) {
+//                              GET_UINT64_V2(from, i, comma, data);
+//                              GET_UINT64_V2(to, i, comma, data);
+//                              GET_UINT64_V2(time_stamp, i, comma, data);
+//                              amount = 0;
+//                              while (data[i] != lf) {
+//                                  if (data[i] == dot) {
+//                                      ++i;
+//                                  }
+//                                  amount = (data[i] - '0') + 10 * amount;
+//                                  ++i;
+//                              }
+//                              uint32_t cur_index = 0;
+//                              forward[cur_index] = Transfer(amount, id_map[from], id_map[to], time_stamp);
+//                          }
+//                      }
+//    );
+
+//    auto *beg = trans_data;
+//    uint64_t from;
+//    uint64_t to;
+//    uint64_t time_stamp;
+//    uint32_t amount;
+//    uint64_t prev_id;
+//    uint32_t index = 0;
+//    GET_UINT64(prev_id, trans_data, comma);
+//
+//    for (uint32_t i = 0; i < edge_num; ++i) {
+//        GET_UINT64(from, beg, comma);
+//        GET_UINT64(to, beg, comma);
+//        GET_UINT64(time_stamp, beg, comma);
+//
+//        amount = 0;
+//        while (*beg != lf) {
+//            if (*beg == dot) {
+//                ++beg;
+//            }
+//            amount = (*beg - '0') + 10 * amount;
+//            ++beg;
+//        }
+//        ++beg;
+//        if (from != prev_id) {
+//            ++index;
+//            prev_id = from;
+//        }
+//        forward[i] = Transfer(amount, index, to, time_stamp);
+//    }
+//
+//    tbb::parallel_for(tbb::blocked_range<off_t>(0, edge_num),
+//                      [&](tbb::blocked_range<off_t> r) {
+//                          for (off_t i = r.begin(); i < r.end(); ++i) {
+//                              forward[i].dst_id = id_map[forward[i].dst_id];
+//                          }
+//                      });
 }
