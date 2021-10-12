@@ -75,6 +75,7 @@ public:
     void Run();
 
 private:
+    void test();
     void SortTransfer();
 
     void SortBackTransfer();
@@ -96,7 +97,7 @@ private:
 
     void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                           bool *in_back, uint32_t *back_record_index,
-                          char* local_res);
+                          char* local_res, uint32_t back_recode_num);
 
     void ExportRes(const std::array<uint32_t, 7> &res_index,
                    uint32_t cycle_len, char *tmp_buffer);

@@ -5,6 +5,7 @@
 #include "cycle_detecter.h"
 #include "file_helper.h"
 #include "string_utils.h"
+#include "ska_sort.h"
 #include "tbb/global_control.h"
 #include "tbb/parallel_sort.h"
 #include "tbb/parallel_for_each.h"
@@ -62,17 +63,48 @@ void CycleDetecter::SortTransfer() {
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
                       [&](tbb::blocked_range<uint32_t> r) {
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
-                              std::sort(forward_trans + forward_edge_index[i],
-                                        forward_trans + forward_edge_index[i + 1],
-                                        Transfer::cmp_transfer_ts);
+//                              std::sort(forward_trans + forward_edge_index[i],
+//                                        forward_trans + forward_edge_index[i + 1],
+//                                        Transfer::cmp_transfer_ts);
+                              ska_sort(forward_trans + forward_edge_index[i],
+                                       forward_trans + forward_edge_index[i + 1],
+                                       [](Transfer& it){ return it.time_stamp;});
                           }
                       });
 }
 
 void CycleDetecter::SortBackTransfer() {
     PerfThis(__FUNCTION__);
-    tbb::parallel_sort(forward_trans, forward_trans + edge_num, Transfer::cmp_back_trans);
+    tbb::parallel_sort(forward_trans, forward_trans + edge_num, Transfer::test);
+//    parasort(edge_num, forward_trans, 32, 10000);
+//    std::sort(forward_trans, forward_trans + edge_num, Transfer::test);
+//    ska_sort(forward_trans, forward_trans + edge_num, [](Transfer& it){ return it.dst_id;});
 //    pdqsort(forward_trans, forward_trans + edge_num, Transfer::cmp_back_trans);
+}
+
+
+void CycleDetecter::test() {
+    PerfThis(__FUNCTION__);
+    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
+                      [&](tbb::blocked_range<uint32_t> r) {
+                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
+//                              std::sort(forward_trans + forward_edge_index[i],
+//                                        forward_trans + forward_edge_index[i + 1],
+//                                        Transfer::cmp_transfer_ts);
+                              ska_sort(forward_trans + backward_edge_index[i],
+                                       forward_trans + backward_edge_index[i + 1],
+                                       [](Transfer& it){ return -it.time_stamp;});
+                          }
+                      });
+    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
+                      [&](tbb::blocked_range<uint32_t> r) {
+                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
+//                              backward_src[i] = forward_trans[i].dst_id;
+                              backward_dst[i] = forward_trans[i].src_id;
+                              backward_ts[i] = forward_trans[i].time_stamp;
+                              backward_value[i] = forward_trans[i].amount;
+                          }
+                      });
 }
 
 void CycleDetecter::FlattenTrans() {
@@ -93,9 +125,9 @@ void CycleDetecter::FlattenBackTrans() {
                       [&](tbb::blocked_range<uint32_t> r) {
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
                               backward_src[i] = forward_trans[i].dst_id;
-                              backward_dst[i] = forward_trans[i].src_id;
-                              backward_ts[i] = forward_trans[i].time_stamp;
-                              backward_value[i] = forward_trans[i].amount;
+//                              backward_dst[i] = forward_trans[i].src_id;
+//                              backward_ts[i] = forward_trans[i].time_stamp;
+//                              backward_value[i] = forward_trans[i].amount;
                           }
                       });
 }
@@ -167,22 +199,25 @@ void CycleDetecter::FindCycle() {
                           uint32_t back_recode_num = 0;
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
                               BackFindThree(i, back_rec, in_back, back_record_index, back_recode_num);
-                              ForwardFindThree(i, back_rec, in_back, back_record_index, local_res);
+                              if (back_recode_num == 0) {
+                                  continue;
+                              }
+                              ForwardFindThree(i, back_rec, in_back, back_record_index, local_res, back_recode_num);
                           }
                           delete []back_rec;
                           delete []in_back;
                           delete []back_record_index;
                       });
 
-    std::cout <<
-              cycyle_num_len_3.load() << " " <<
-              cycyle_num_len_4.load() << " " <<
-              cycyle_num_len_5.load() << " " <<
-              cycyle_num_len_6.load() << std::endl;
-
-    cycyle_num = cycyle_num_len_3.load() + cycyle_num_len_4.load() +
-                 cycyle_num_len_5.load() + cycyle_num_len_6.load();
-    std::cout << "cycle total num: " << cycyle_num << std::endl;
+//    std::cout <<
+//              cycyle_num_len_3.load() << " " <<
+//              cycyle_num_len_4.load() << " " <<
+//              cycyle_num_len_5.load() << " " <<
+//              cycyle_num_len_6.load() << std::endl;
+//
+//    cycyle_num = cycyle_num_len_3.load() + cycyle_num_len_4.load() +
+//                 cycyle_num_len_5.load() + cycyle_num_len_6.load();
+//    std::cout << "cycle total num: " << cycyle_num << std::endl;
 }
 
 //void CycleDetecter::NativeSixFor(uint32_t cur_node) {
@@ -297,6 +332,7 @@ void CycleDetecter::BackFindThree(uint32_t cur_node, BackRec* back_rec,
                 SkipAmtBack(back_amt_2, k);
                 node_3 = backward_dst[k];
                 SkipDupliNode(node_3 == node_1);
+
                 back_rec[back_recode_num++] = BackRec(node_3, k, j, i);
                 in_back[node_3] = true;
             }
@@ -305,22 +341,24 @@ void CycleDetecter::BackFindThree(uint32_t cur_node, BackRec* back_rec,
     if(back_recode_num == 0) {
         return;
     }
-    std::sort(back_rec, back_rec + back_recode_num, BackRec::CmpBackRec);
-
-    back_record_index[back_rec[0].back_node] = 0;
-
-    for(uint32_t idx = 1; idx < back_recode_num; ++idx) {
-        if(back_rec[idx-1].back_node == back_rec[idx].back_node)
-            continue;
-        back_record_index[back_rec[idx-1].back_node + 1] = idx;
-        back_record_index[back_rec[idx].back_node] = idx;
-    }
-
-    back_record_index[back_rec[back_recode_num - 1].back_node + 1] = back_recode_num;
+//    std::sort(back_rec, back_rec + back_recode_num, BackRec::CmpBackRec);
+//    ska_sort(back_rec, back_rec + back_recode_num, [](BackRec& it){ return it.back_node;});
+//
+//    back_record_index[back_rec[0].back_node] = 0;
+//
+//    for(uint32_t idx = 1; idx < back_recode_num; ++idx) {
+//        if(back_rec[idx-1].back_node == back_rec[idx].back_node)
+//            continue;
+//        back_record_index[back_rec[idx-1].back_node + 1] = idx;
+//        back_record_index[back_rec[idx].back_node] = idx;
+//    }
+//
+//    back_record_index[back_rec[back_recode_num - 1].back_node + 1] = back_recode_num;
 }
 
 void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
-                                     bool *in_back, uint32_t *back_record_index, char* local_res) {
+                                     bool *in_back, uint32_t *back_record_index,
+                                     char* local_res, uint32_t back_recode_num) {
 //    if (cur_node % 10000 == 0) {
 //        std::cout << "cur node: " << cur_node << std::endl;
 //    }
@@ -338,7 +376,8 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
         forward_amt_1_bottom = forward_value[i] * 9;
         if (in_back[node_1]) {
             res_index[1] = i;
-            for (j = back_record_index[node_1]; j < back_record_index[node_1 + 1]; ++j) {
+            for (j = 0; j < back_recode_num; ++j) {
+                IfTrueThenDo(back_rec[j].back_node != node_1, continue;);
                 BackRec& tmp_back = back_rec[j];
                 if (forward_ts_1 > backward_ts[tmp_back.b1_idx]) {
                     continue;
@@ -351,8 +390,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                 res_index[3] = tmp_back.b2_idx;
                 res_index[4] = tmp_back.b3_idx;
                 ExportResWithBackRec(res_index, 4, local_res);
-//                ExportRes(res_index, 4, local_res);
-                ++cycyle_num_len_4;
+//                ++cycyle_num_len_4;
             }
         }
         SkipTs(forward_ts_1, j, node_1);
@@ -366,7 +404,8 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
             if (in_back[node_2]) {
                 res_index[1] = i;
                 res_index[2] = j;
-                for (k = back_record_index[node_2]; k < back_record_index[node_2 + 1]; ++k) {
+                for (k = 0; k < back_recode_num; ++k) {
+                    IfTrueThenDo(back_rec[k].back_node != node_2, continue;);
                     BackRec& tmp_back = back_rec[k];
                     if (forward_ts_2 > backward_ts[tmp_back.b1_idx]) {
                         continue;
@@ -384,8 +423,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                     res_index[4] = tmp_back.b2_idx;
                     res_index[5] = tmp_back.b3_idx;
                     ExportResWithBackRec(res_index, 5, local_res);
-//                ExportRes(res_index, 4, local_res);
-                    ++cycyle_num_len_5;
+//                    ++cycyle_num_len_5;
                 }
             }
 
@@ -398,7 +436,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                              res_index[2] = j;
                              res_index[3] = k;
                              ExportRes(res_index, 3, local_res);
-                             ++cycyle_num_len_3;
+//                             ++cycyle_num_len_3;
                              continue;)
                 SkipDupliNode(node_3 == node_1);
                 forward_ts_3 = forward_ts[k];
@@ -408,7 +446,8 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                     res_index[1] = i;
                     res_index[2] = j;
                     res_index[3] = k;
-                    for (m = back_record_index[node_3]; m < back_record_index[node_3 + 1]; ++m) {
+                    for (m = 0; m < back_recode_num; ++m) {
+                        IfTrueThenDo(back_rec[m].back_node != node_3, continue;);
                         BackRec& tmp_back = back_rec[m];
                         if (forward_ts_3 > backward_ts[tmp_back.b1_idx]) {
                             continue;
@@ -427,8 +466,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                         res_index[5] = tmp_back.b2_idx;
                         res_index[6] = tmp_back.b3_idx;
                         ExportResWithBackRec(res_index, 6, local_res);
-//                ExportRes(res_index, 4, local_res);
-                        ++cycyle_num_len_6;
+//                        ++cycyle_num_len_6;
                     }
                 }
             }
@@ -589,6 +627,7 @@ void CycleDetecter::Run() {
     SortBackTransfer();
     FlattenBackTrans();
     MakeBackEdgeIndex();
+    test();
 
     res_data = new char[335620 * 300];
     FindCycle();

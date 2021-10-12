@@ -14,17 +14,17 @@ int main(int argc, char* argv[]) {
 //    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/transfer.csv";
 //    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/account.csv";
 //
-    if (argc != 4) {
-        std::cerr << "args error!" << std::endl;
-        return 0;
-    }
+//    if (argc != 4) {
+//        std::cerr << "args error!" << std::endl;
+//        return 0;
+//    }/home/cmake-3.10.2-Linux-x86_64/bin
 
     auto account_file = argv[1];
     auto trans_file = argv[2];
     auto res_file = argv[3];
-//    tbb::global_control c(tbb::global_control::max_allowed_parallelism, 1);
-    const size_t parallelism = tbb::task_scheduler_init::default_num_threads();
-    std::cout << parallelism << std::endl;
+    tbb::global_control c(tbb::global_control::max_allowed_parallelism, 16);
+//    const size_t parallelism = tbb::task_scheduler_init::default_num_threads();
+//    std::cout << parallelism << std::endl;
     CycleDetecter cycle_detecter(account_file, trans_file, res_file);
     cycle_detecter.Run();
     PerfUtils::PerfRaii::Report();

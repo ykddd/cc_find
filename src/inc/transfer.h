@@ -26,6 +26,10 @@ public:
                (lhs.src_id == rhs.src_id && lhs.time_stamp < rhs.time_stamp);
     }
 
+    static bool test(const Transfer &lhs, const Transfer &rhs) {
+        return (lhs.dst_id < rhs.dst_id);
+    }
+
 
     static bool cmp_transfer_ts(const Transfer &lhs, const Transfer &rhs) {
         return lhs.time_stamp < rhs.time_stamp;
