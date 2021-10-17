@@ -6,8 +6,10 @@
 #include "file_helper.h"
 #include "string_utils.h"
 #include "ska_sort.h"
+#include "tbb/iterators.h"
 #include "tbb/global_control.h"
 #include "tbb/parallel_sort.h"
+#include "tbb/cache_aligned_allocator.h"
 #include "tbb/parallel_for_each.h"
 #include "tbb/enumerable_thread_specific.h"
 
@@ -68,14 +70,21 @@ void CycleDetecter::SortTransfer() {
 //                                        Transfer::cmp_transfer_ts);
                               ska_sort(forward_trans + forward_edge_index[i],
                                        forward_trans + forward_edge_index[i + 1],
-                                       [](Transfer& it){ return it.time_stamp;});
+                                       [](const Transfer& it){ return it.time_stamp;});
                           }
                       });
 }
 
 void CycleDetecter::SortBackTransfer() {
     PerfThis(__FUNCTION__);
-    tbb::parallel_sort(forward_trans, forward_trans + edge_num, Transfer::test);
+    auto beg = tbb::make_zip_iterator(backward_src, backward_ts, backward_dst, backward_value);
+    auto end = tbb::make_zip_iterator(backward_src + edge_num,
+                                      backward_ts + edge_num,
+                                      backward_dst + edge_num,
+                                      backward_value + edge_num);
+    std::cout << "here" << std::endl;
+    tbb::parallel_sort(beg, end, Transfer::sort_fun());
+//    tbb::parallel_sort(beg, end, Transfer::sort_fun());
 //    parasort(edge_num, forward_trans, 32, 10000);
 //    std::sort(forward_trans, forward_trans + edge_num, Transfer::test);
 //    ska_sort(forward_trans, forward_trans + edge_num, [](Transfer& it){ return it.dst_id;});
@@ -85,26 +94,7 @@ void CycleDetecter::SortBackTransfer() {
 
 void CycleDetecter::test() {
     PerfThis(__FUNCTION__);
-    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
-                      [&](tbb::blocked_range<uint32_t> r) {
-                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
-//                              std::sort(forward_trans + forward_edge_index[i],
-//                                        forward_trans + forward_edge_index[i + 1],
-//                                        Transfer::cmp_transfer_ts);
-                              ska_sort(forward_trans + backward_edge_index[i],
-                                       forward_trans + backward_edge_index[i + 1],
-                                       [](Transfer& it){ return -it.time_stamp;});
-                          }
-                      });
-    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
-                      [&](tbb::blocked_range<uint32_t> r) {
-                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
-//                              backward_src[i] = forward_trans[i].dst_id;
-                              backward_dst[i] = forward_trans[i].src_id;
-                              backward_ts[i] = forward_trans[i].time_stamp;
-                              backward_value[i] = forward_trans[i].amount;
-                          }
-                      });
+    tbb::parallel_sort(forward_trans, forward_trans + edge_num, Transfer::cmp_back_trans);
 }
 
 void CycleDetecter::FlattenTrans() {
@@ -125,9 +115,9 @@ void CycleDetecter::FlattenBackTrans() {
                       [&](tbb::blocked_range<uint32_t> r) {
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
                               backward_src[i] = forward_trans[i].dst_id;
-//                              backward_dst[i] = forward_trans[i].src_id;
-//                              backward_ts[i] = forward_trans[i].time_stamp;
-//                              backward_value[i] = forward_trans[i].amount;
+                              backward_dst[i] = forward_trans[i].src_id;
+                              backward_ts[i] = forward_trans[i].time_stamp;
+                              backward_value[i] = forward_trans[i].amount;
                           }
                       });
 }
@@ -183,41 +173,33 @@ void CycleDetecter::MakeBackEdgeIndex() {
 
 void CycleDetecter::FindCycle() {
     PerfThis(__FUNCTION__);
-//    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
-//                      [&](tbb::blocked_range<uint32_t> r) {
-//                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
-//                              NativeSixFor(i);
-//                          }
-//                      });
-
+    tbb::affinity_partitioner staticPartitioner;
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
                       [&](tbb::blocked_range<uint32_t> r) {
                           auto back_rec = new BackRec[10000];
                           auto in_back = new bool[account_num]{};
-                          auto back_record_index = new uint32_t[account_num + 1];
                           char local_res[300];
                           uint32_t back_recode_num = 0;
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
-                              BackFindThree(i, back_rec, in_back, back_record_index, back_recode_num);
+                              BackFindThree(i, back_rec, in_back, back_recode_num);
                               if (back_recode_num == 0) {
                                   continue;
                               }
-                              ForwardFindThree(i, back_rec, in_back, back_record_index, local_res, back_recode_num);
+                              ForwardFindThree(i, back_rec, in_back, local_res, back_recode_num);
                           }
                           delete []back_rec;
                           delete []in_back;
-                          delete []back_record_index;
-                      });
+                      }, staticPartitioner);
 
-//    std::cout <<
-//              cycyle_num_len_3.load() << " " <<
-//              cycyle_num_len_4.load() << " " <<
-//              cycyle_num_len_5.load() << " " <<
-//              cycyle_num_len_6.load() << std::endl;
-//
-//    cycyle_num = cycyle_num_len_3.load() + cycyle_num_len_4.load() +
-//                 cycyle_num_len_5.load() + cycyle_num_len_6.load();
-//    std::cout << "cycle total num: " << cycyle_num << std::endl;
+    std::cout <<
+              cycyle_num_len_3.load() << " " <<
+              cycyle_num_len_4.load() << " " <<
+              cycyle_num_len_5.load() << " " <<
+              cycyle_num_len_6.load() << std::endl;
+
+    cycyle_num = cycyle_num_len_3.load() + cycyle_num_len_4.load() +
+                 cycyle_num_len_5.load() + cycyle_num_len_6.load();
+    std::cout << "cycle total num: " << cycyle_num << std::endl;
 }
 
 //void CycleDetecter::NativeSixFor(uint32_t cur_node) {
@@ -303,62 +285,37 @@ void CycleDetecter::FindCycle() {
 //}
 
 void CycleDetecter::BackFindThree(uint32_t cur_node, BackRec* back_rec,
-                                  bool *in_back, uint32_t *back_record_index,
-                                  uint32_t& back_recode_num) {
+                                  bool *in_back, uint32_t& back_recode_num) {
     uint32_t node_1, node_2, node_3;
     uint32_t back_amt_1, back_amt_2;
-    uint32_t i, j, k;
-    for(i = 0 ; i < back_recode_num; ++i){
+    uint32_t j, k;
+    for(uint32_t i = 0 ; i < back_recode_num; ++i){
         in_back[back_rec[i].back_node] = false;
     }
     back_recode_num = 0;
-    for (i = backward_edge_index[cur_node]; i < backward_edge_index[cur_node + 1]; ++i) {
+    for (uint32_t i = backward_edge_index[cur_node]; i < backward_edge_index[cur_node + 1]; ++i) {
         node_1 = backward_dst[i];
         SkipTsBack(i, j, node_1);
         back_amt_1 = backward_value[i] * 10;
         for (; j < backward_edge_index[node_1 + 1]; ++j) {
-//            if (backward_ts[j] > backward_ts[i]) {
-//                continue;
-//            }
             SkipAmtBack(back_amt_1, j);
             node_2 = backward_dst[j];
             SkipDupliNode(node_2 == cur_node);
             back_amt_2 = backward_value[j] * 10;
             SkipTsBack(j, k, node_2);
             for (; k < backward_edge_index[node_2 + 1]; ++k) {
-//                if (backward_ts[k] > backward_ts[j]) {
-//                    continue;
-//                }
                 SkipAmtBack(back_amt_2, k);
                 node_3 = backward_dst[k];
                 SkipDupliNode(node_3 == node_1);
-
-                back_rec[back_recode_num++] = BackRec(node_3, k, j, i);
+                back_rec[back_recode_num++].SetRec(node_3, k, j, i);
                 in_back[node_3] = true;
             }
         }
     }
-    if(back_recode_num == 0) {
-        return;
-    }
-//    std::sort(back_rec, back_rec + back_recode_num, BackRec::CmpBackRec);
-//    ska_sort(back_rec, back_rec + back_recode_num, [](BackRec& it){ return it.back_node;});
-//
-//    back_record_index[back_rec[0].back_node] = 0;
-//
-//    for(uint32_t idx = 1; idx < back_recode_num; ++idx) {
-//        if(back_rec[idx-1].back_node == back_rec[idx].back_node)
-//            continue;
-//        back_record_index[back_rec[idx-1].back_node + 1] = idx;
-//        back_record_index[back_rec[idx].back_node] = idx;
-//    }
-//
-//    back_record_index[back_rec[back_recode_num - 1].back_node + 1] = back_recode_num;
 }
 
 void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
-                                     bool *in_back, uint32_t *back_record_index,
-                                     char* local_res, uint32_t back_recode_num) {
+                                     bool *in_back, char* local_res, uint32_t back_recode_num) {
 //    if (cur_node % 10000 == 0) {
 //        std::cout << "cur node: " << cur_node << std::endl;
 //    }
@@ -390,7 +347,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                 res_index[3] = tmp_back.b2_idx;
                 res_index[4] = tmp_back.b3_idx;
                 ExportResWithBackRec(res_index, 4, local_res);
-//                ++cycyle_num_len_4;
+                ++cycyle_num_len_4;
             }
         }
         SkipTs(forward_ts_1, j, node_1);
@@ -423,7 +380,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                     res_index[4] = tmp_back.b2_idx;
                     res_index[5] = tmp_back.b3_idx;
                     ExportResWithBackRec(res_index, 5, local_res);
-//                    ++cycyle_num_len_5;
+                    ++cycyle_num_len_5;
                 }
             }
 
@@ -436,7 +393,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                              res_index[2] = j;
                              res_index[3] = k;
                              ExportRes(res_index, 3, local_res);
-//                             ++cycyle_num_len_3;
+                             ++cycyle_num_len_3;
                              continue;)
                 SkipDupliNode(node_3 == node_1);
                 forward_ts_3 = forward_ts[k];
@@ -466,7 +423,7 @@ void CycleDetecter::ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                         res_index[5] = tmp_back.b2_idx;
                         res_index[6] = tmp_back.b3_idx;
                         ExportResWithBackRec(res_index, 6, local_res);
-//                        ++cycyle_num_len_6;
+                        ++cycyle_num_len_6;
                     }
                 }
             }
@@ -598,7 +555,9 @@ void CycleDetecter::Run() {
     // 1:998140, 10:7200880
     account_num = FileHelper::GetAccountNum(account_data, account_file_len);
 
-    account = new uint64_t[account_num];
+
+//    account = new uint64_t[account_num];
+    account = tbb::cache_aligned_allocator<uint64_t>().allocate(account_num);
     FileHelper::GetAccount(account_data, account_num, account, id_map);
 
     // edge_num
@@ -606,28 +565,38 @@ void CycleDetecter::Run() {
 
     forward_trans = FileHelper::GetTransferFromFile(trans_data, trans_file_len,
                                                     edge_num, forward_trans, id_map);
-    forward_src = new uint32_t[edge_num];
-    forward_dst = new uint32_t[edge_num];
-    forward_ts = new int64_t[edge_num];
-    forward_value = new uint32_t[edge_num];
-    forward_edge_index = new uint32_t[account_num + 2];
 
-    backward_src = new uint32_t[edge_num];
-    backward_dst = new uint32_t[edge_num];
-    backward_ts = new int64_t[edge_num];
-    backward_value = new uint32_t[edge_num];
-    backward_edge_index = new uint32_t[account_num + 2];
+    forward_src = tbb::cache_aligned_allocator<uint32_t>().allocate(edge_num);
+    forward_dst = tbb::cache_aligned_allocator<uint32_t>().allocate(edge_num);
+    forward_ts = tbb::cache_aligned_allocator<uint64_t>().allocate(edge_num);
+    forward_value = tbb::cache_aligned_allocator<uint32_t>().allocate(edge_num);
+    forward_edge_index = tbb::cache_aligned_allocator<uint32_t>().allocate(account_num + 2);
+
+    backward_src = tbb::cache_aligned_allocator<uint32_t>().allocate(edge_num);
+    backward_dst = tbb::cache_aligned_allocator<uint32_t>().allocate(edge_num);
+    backward_ts = tbb::cache_aligned_allocator<uint64_t>().allocate(edge_num);
+    backward_value = tbb::cache_aligned_allocator<uint32_t>().allocate(edge_num);
+    backward_edge_index = tbb::cache_aligned_allocator<uint32_t>().allocate(account_num + 2);
+
+//    forward_src = new uint32_t[edge_num];
+//    forward_dst = new uint32_t[edge_num];
+//    forward_ts = new uint64_t[edge_num];
+//    forward_value = new uint32_t[edge_num];
+//    forward_edge_index = new uint32_t[account_num + 2];
+//
+//    backward_src = new uint32_t[edge_num];
+//    backward_dst = new uint32_t[edge_num];
+//    backward_ts = new uint64_t[edge_num];
+//    backward_value = new uint32_t[edge_num];
+//    backward_edge_index = new uint32_t[account_num + 2];
 
     MakeEdgeIndex();
     SortTransfer();
     FlattenTrans();
 
-
-
-    SortBackTransfer();
     FlattenBackTrans();
+    SortBackTransfer();
     MakeBackEdgeIndex();
-    test();
 
     res_data = new char[335620 * 300];
     FindCycle();

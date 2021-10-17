@@ -1,1 +1,1 @@
-tar -zcvf my.tar.gz run.sh build.sh src/
+tar -zcvf my.tar.gz run.sh compile.sh src/

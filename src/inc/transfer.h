@@ -8,6 +8,7 @@
 //src.id:INT64, dst.id:INT64, timestamp:INT64, amount:double
 #include <cstdlib>
 #include <cstdint>
+#include <tuple>
 
 using EdgeNumType = uint32_t;
 using IDType = uint32_t;
@@ -40,17 +41,18 @@ public:
                (lhs.dst_id == rhs.dst_id && lhs.time_stamp > rhs.time_stamp);
     }
 
+    struct sort_fun {
+        template<typename T1, typename T2>
+        bool operator()(T1 lhs, T2 rhs) const {
+            return ((std::get<0>(lhs) < std::get<0>(rhs)) ||
+                    (std::get<0>(lhs) == std::get<0>(rhs) && std::get<1>(lhs) > std::get<1>(rhs)));
+        }
+    };
+
     AmtType amount;
     IDType src_id;
     uint32_t dst_id;
     TSType time_stamp;
-};
-
-struct CmpTransferInQue {
-    bool operator()(Transfer& lhs, Transfer &rhs) {
-        return (lhs.src_id < rhs.src_id) ||
-               (lhs.src_id == rhs.src_id && lhs.time_stamp < rhs.time_stamp);
-    }
 };
 
 #endif //CYCLE_DETECT_TRANSFER_H

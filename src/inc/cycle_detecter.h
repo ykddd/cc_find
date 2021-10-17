@@ -24,8 +24,11 @@ struct BackRec {
     BackRec(uint32_t node, uint32_t b1, uint32_t b2, uint32_t b3) :
             back_node(node), b1_idx(b1), b2_idx(b2), b3_idx(b3) {};
 
-    static bool CmpBackRec(const BackRec &lhs, const BackRec &rhs) {
-        return lhs.back_node < rhs.back_node;
+    void SetRec(uint32_t node, uint32_t b1, uint32_t b2, uint32_t b3) {
+        back_node = node;
+        b1_idx = b1;
+        b2_idx = b2;
+        b3_idx = b3;
     }
 
     uint32_t back_node;
@@ -54,20 +57,20 @@ public:
         munmap(account_data, account_file_len);
         munmap(trans_data, trans_file_len);
 
-        delete[]account;
-        delete[]forward_trans;
-
-        delete[]forward_src;
-        delete[]forward_dst;
-        delete[]forward_value;
-        delete[]forward_ts;
-        delete[]forward_edge_index;
-
-//        delete []backward_src;
-//        delete []backward_dst;
-//        delete []backward_value;
-//        delete []backward_ts;
-//        delete []backward_edge_index;
+//        delete[]account;
+//        delete[]forward_trans;
+//
+//        delete[]forward_src;
+//        delete[]forward_dst;
+//        delete[]forward_value;
+//        delete[]forward_ts;
+//        delete[]forward_edge_index;
+//
+//        delete[]backward_src;
+//        delete[]backward_dst;
+//        delete[]backward_value;
+//        delete[]backward_ts;
+//        delete[]backward_edge_index;
 
         delete[]res_data;
     }
@@ -76,6 +79,7 @@ public:
 
 private:
     void test();
+
     void SortTransfer();
 
     void SortBackTransfer();
@@ -90,14 +94,11 @@ private:
 
     void FindCycle();
 
-//    void NativeSixFor(uint32_t cur_node);
-
     void BackFindThree(uint32_t cur_node, BackRec *back_rec,
-                       bool *in_back, uint32_t *back_record_index, uint32_t &back_recode_num);
+                       bool *in_back, uint32_t &back_recode_num);
 
     void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
-                          bool *in_back, uint32_t *back_record_index,
-                          char* local_res, uint32_t back_recode_num);
+                          bool *in_back, char *local_res, uint32_t back_recode_num);
 
     void ExportRes(const std::array<uint32_t, 7> &res_index,
                    uint32_t cycle_len, char *tmp_buffer);
@@ -133,13 +134,13 @@ private:
     uint32_t *forward_src = nullptr;
     uint32_t *forward_dst = nullptr;
     uint32_t *forward_value = nullptr;
-    int64_t *forward_ts = nullptr;
+    uint64_t *forward_ts = nullptr;
     uint32_t *forward_edge_index = nullptr;
 
     uint32_t *backward_src = nullptr;
     uint32_t *backward_dst = nullptr;
     uint32_t *backward_value = nullptr;
-    int64_t *backward_ts = nullptr;
+    uint64_t *backward_ts = nullptr;
     uint32_t *backward_edge_index = nullptr;
 
 

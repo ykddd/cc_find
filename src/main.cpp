@@ -17,7 +17,7 @@ int main(int argc, char* argv[]) {
 //    if (argc != 4) {
 //        std::cerr << "args error!" << std::endl;
 //        return 0;
-//    }/home/cmake-3.10.2-Linux-x86_64/bin
+//    }
 
     auto account_file = argv[1];
     auto trans_file = argv[2];
@@ -31,5 +31,6 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
 
 
