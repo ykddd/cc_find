@@ -1,3 +1,6 @@
 [submodule "src/third_party/tbb"]
 	path = src/third_party/tbb
 	url = https://github.com/wjakob/tbb.git
+[submodule "src/third_party/mimalloc"]
+	path = src/third_party/mimalloc
+	url = https://github.com/microsoft/mimalloc.git
