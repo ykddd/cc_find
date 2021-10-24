@@ -9,6 +9,13 @@ cd build
 cmake ..
 make -j
 
+cd  $MYDIR/third_party/mimalloc
+rm -rf build
+mkdir build
+cd build
+cmake ..
+make -j
+
 cd $MYDIR
 rm -rf build
 mkdir build

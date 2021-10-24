@@ -9,10 +9,13 @@
 #include "tbb/parallel_for.h"
 #include "tbb/parallel_for_each.h"
 #include "tbb/global_control.h"
+#include "tbb/cache_aligned_allocator.h"
 #include "tbb/task_scheduler_init.h"
+#include "tbb/enumerable_thread_specific.h"
 #include "tbb/iterators.h"
 #include "tbb/parallel_sort.h"
 #include "string_utils.h"
+#include "mimalloc.h"
 
 
 #include <fcntl.h>
@@ -21,16 +24,18 @@
 #include <unistd.h>
 #include <iostream>
 #include <chrono>
+#include <numeric>
 #include <vector>
 #include <thread>
 #include <cmath>
-#include <unordered_map>
 #include <array>
+
 
 constexpr char lf = '\n';
 constexpr char zero = '0';
 constexpr char comma = ',';
 constexpr char dot = '.';
+typedef tbb::enumerable_thread_specific<std::vector<uint32_t>> CounterType;
 
 struct Transfer {
     Transfer() = default;
@@ -93,10 +98,6 @@ uint32_t *backward_value;
 uint64_t *backward_ts;
 uint32_t *backward_edge_index;
 
-tbb::atomic<uint32_t> cycyle_num_len_3{0};
-tbb::atomic<uint32_t> cycyle_num_len_4{0};
-tbb::atomic<uint32_t> cycyle_num_len_5{0};
-tbb::atomic<uint32_t> cycyle_num_len_6{0};
 
 tbb::atomic<off_t> res_buff_offset{0};
 
@@ -260,12 +261,6 @@ void BackFindThree(uint32_t cur_node, BackRec *back_rec,
     uint32_t node_1, node_2, node_3;
     uint32_t back_amt_1, back_amt_2;
     uint32_t j, k;
-//    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, back_recode_num),
-//                      [&](tbb::blocked_range<uint32_t> r) {
-//                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
-//                              in_back[back_rec[i].back_node] = false;
-//                          }
-//                      });
     for (uint32_t i = 0; i < back_recode_num; ++i) {
         in_back[back_rec[i].back_node] = false;
     }
@@ -292,10 +287,9 @@ void BackFindThree(uint32_t cur_node, BackRec *back_rec,
 }
 
 void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
-                      bool *in_back, char *local_res, uint32_t back_recode_num) {
-//    if (cur_node % 10000 == 0) {
-//        std::cout << "cur node: " << cur_node << std::endl;
-//    }
+                      bool *in_back, char *local_res,
+                      uint32_t back_recode_num,
+                      CounterType::reference counter) {
     uint32_t node_1, node_2, node_3;
     uint32_t back2, back3;
     uint32_t j, k, m;
@@ -303,107 +297,99 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
     uint32_t forward_amt_1_bottom, forward_amt_2_bottom, forward_amt_3_bottom;
     uint64_t forward_ts_1, forward_ts_2, forward_ts_3;
     auto res_index = new uint32_t[7];
+    res_index[0] = cur_node;
     for (uint32_t i = forward_edge_index[cur_node]; i < forward_edge_index[cur_node + 1]; ++i) {
         node_1 = forward_dst[i];
         forward_ts_1 = forward_ts[i];
         forward_amt_1_top = forward_value[i] * 11;
         forward_amt_1_bottom = forward_value[i] * 9;
         if (in_back[node_1]) {
+            res_index[1] = i;
             for (j = 0; j < back_recode_num; ++j) {
-                IfTrueThenDo(back_rec[j].back_node != node_1,
-                             continue;);
                 BackRec &tmp_back = back_rec[j];
-                if (forward_ts_1 > backward_ts[tmp_back.b1_idx]) {
-                    continue;
-                }
-                if (forward_amt_1_bottom > backward_value[tmp_back.b1_idx] * 10 ||
+                if (tmp_back.back_node != node_1 ||
+                    forward_ts_1 > backward_ts[tmp_back.b1_idx] ||
+                    forward_amt_1_bottom > backward_value[tmp_back.b1_idx] * 10 ||
                     forward_amt_1_top < backward_value[tmp_back.b1_idx] * 10) {
                     continue;
                 }
-                res_index[1] = i;
                 res_index[2] = tmp_back.b1_idx;
                 res_index[3] = tmp_back.b2_idx;
                 res_index[4] = tmp_back.b3_idx;
                 ExportResWithBackRec(res_index, 4, local_res);
-//                ++cycyle_num_len_4;
+                ++counter[1];
             }
         }
         SkipTs(forward_ts_1, j, node_1);
         for (; j < forward_edge_index[node_1 + 1]; ++j) {
-            SkipAmt(forward_amt_1_bottom, forward_amt_1_top, j);
             node_2 = forward_dst[j];
-            SkipDupliNode(node_2 == cur_node);
+            if (forward_amt_1_bottom > forward_value[j] * 10 ||
+                forward_amt_1_top < forward_value[j] * 10 ||
+                node_2 == cur_node) {
+                continue;
+            }
             forward_ts_2 = forward_ts[j];
             forward_amt_2_top = forward_value[j] * 11;
             forward_amt_2_bottom = forward_value[j] * 9;
             if (in_back[node_2]) {
+                res_index[1] = i;
+                res_index[2] = j;
                 for (k = 0; k < back_recode_num; ++k) {
-                    IfTrueThenDo(back_rec[k].back_node != node_2,
-                                 continue;);
                     BackRec &tmp_back = back_rec[k];
-                    if (forward_ts_2 > backward_ts[tmp_back.b1_idx]) {
-                        continue;
-                    }
-
-                    if (forward_amt_2_bottom > backward_value[tmp_back.b1_idx] * 10 ||
-                        forward_amt_2_top < backward_value[tmp_back.b1_idx] * 10) {
-                        continue;
-                    }
-                    if (backward_dst[tmp_back.b2_idx] == node_1 ||
+                    if (tmp_back.back_node != node_2 ||
+                        forward_ts_2 > backward_ts[tmp_back.b1_idx] ||
+                        forward_amt_2_bottom > backward_value[tmp_back.b1_idx] * 10 ||
+                        forward_amt_2_top < backward_value[tmp_back.b1_idx] * 10 ||
+                        backward_dst[tmp_back.b2_idx] == node_1 ||
                         backward_dst[tmp_back.b3_idx] == node_1) {
                         continue;
                     }
-                    res_index[1] = i;
-                    res_index[2] = j;
                     res_index[3] = tmp_back.b1_idx;
                     res_index[4] = tmp_back.b2_idx;
                     res_index[5] = tmp_back.b3_idx;
                     ExportResWithBackRec(res_index, 5, local_res);
-//                    ++cycyle_num_len_5;
+                    ++counter[2];
                 }
             }
 
             SkipTs(forward_ts_2, k, node_2);
             for (; k < forward_edge_index[node_2 + 1]; ++k) {
-                IfTrueThenDo(!forward_dst[k], continue;);
-                SkipAmt(forward_amt_2_bottom, forward_amt_2_top, k);
                 node_3 = forward_dst[k];
+                if (!in_back[node_3] ||
+                    forward_amt_2_bottom > forward_value[k] * 10 ||
+                    forward_amt_2_top < forward_value[k] * 10 ||
+                    node_3 == node_1) { continue; }
+
                 IfTrueThenDo(node_3 == cur_node,
                              res_index[1] = i;
                                      res_index[2] = j;
                                      res_index[3] = k;
-                             ExportRes(res_index, 3, local_res);
-//                        ++cycyle_num_len_3;
-                             continue;)
-                SkipDupliNode(node_3 == node_1);
+                                     ExportRes(res_index, 3, local_res);
+                                     ++counter[0];
+                                     continue;)
                 forward_ts_3 = forward_ts[k];
                 forward_amt_3_top = forward_value[k] * 11;
                 forward_amt_3_bottom = forward_value[k] * 9;
+                res_index[1] = i;
+                res_index[2] = j;
+                res_index[3] = k;
                 for (m = 0; m < back_recode_num; ++m) {
-                    IfTrueThenDo(back_rec[m].back_node != node_3,
-                                 continue;);
                     BackRec &tmp_back = back_rec[m];
-                    if (forward_ts_3 > backward_ts[tmp_back.b1_idx]) {
+                    if (tmp_back.back_node != node_3 ||
+                        forward_ts_3 > backward_ts[tmp_back.b1_idx] ||
+                        forward_amt_3_bottom > backward_value[tmp_back.b1_idx] * 10 ||
+                        forward_amt_3_top < backward_value[tmp_back.b1_idx] * 10 ||
+                        backward_dst[tmp_back.b2_idx] == node_1 ||
+                        backward_dst[tmp_back.b3_idx] == node_1 ||
+                        backward_dst[tmp_back.b2_idx] == node_2 ||
+                        backward_dst[tmp_back.b3_idx] == node_2) {
                         continue;
                     }
-                    if (forward_amt_3_bottom > backward_value[tmp_back.b1_idx] * 10 ||
-                        forward_amt_3_top < backward_value[tmp_back.b1_idx] * 10) {
-                        continue;
-                    }
-                    back2 = backward_dst[tmp_back.b2_idx];
-                    back3 = backward_dst[tmp_back.b3_idx];
-                    if (back2 == node_1 || back3 == node_1 ||
-                        back2 == node_2 || back3 == node_2) {
-                        continue;
-                    }
-                    res_index[1] = i;
-                    res_index[2] = j;
-                    res_index[3] = k;
                     res_index[4] = tmp_back.b1_idx;
                     res_index[5] = tmp_back.b2_idx;
                     res_index[6] = tmp_back.b3_idx;
                     ExportResWithBackRec(res_index, 6, local_res);
-//                    ++cycyle_num_len_6;
+                    ++counter[3];
                 }
             }
         }
@@ -420,24 +406,23 @@ int main(int argc, char *argv[]) {
     tbb::global_control c(tbb::global_control::max_allowed_parallelism, thread_num);
     std::cout << thread_num << std::endl;
 
-    char res_file[] = "./result.csv";
+//    char res_file[] = "./result.csv";
 //    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/test/test.csv";
 //    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/test/account.csv";
 //    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/transfer.csv";
 //    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/account.csv";
-    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/transfer.csv";
-    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/account.csv";
+//    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/transfer.csv";
+//    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/account.csv";
 //
-//    if (argc != 4) {
-//        std::cerr << "args error!" << std::endl;
-//        return 0;
-//    }
+    if (argc != 4) {
+        std::cerr << "args error!" << std::endl;
+        return 0;
+    }
 
-//    auto account_file = argv[1];
-//    auto trans_file = argv[2];
-//    auto res_file = argv[3];
+    auto account_file = argv[1];
+    auto trans_file = argv[2];
+    auto res_file = argv[3];
 
-//    tbb::global_control c(tbb::global_control::max_allowed_parallelism, 16);
     auto account_fd = open(account_file, O_RDONLY);
     auto account_file_len = lseek(account_fd, 0, SEEK_END);
     auto account_data = (char *) mmap(nullptr, account_file_len, PROT_READ, MAP_PRIVATE, account_fd, 0);
@@ -454,7 +439,37 @@ int main(int argc, char *argv[]) {
     account_num = is_s1 ? 998140 : 7200880;
     edge_num = is_s1 ? 28940477 : 286818003;
 
-    account = static_cast<uint64_t *>(malloc(sizeof(uint64_t) * account_num));
+
+    mi_option_enable(mi_option_t::mi_option_large_os_pages);
+
+    account = static_cast<uint64_t *>(mi_malloc(sizeof(uint64_t) * account_num));
+    forward = static_cast<Transfer *>(mi_malloc(sizeof(Transfer) * edge_num));
+    forward_src = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
+    forward_edge_index = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num + 1));
+    forward_dst = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
+    forward_ts = static_cast<uint64_t *>(mi_malloc(sizeof(uint64_t) * edge_num));
+    forward_value = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
+
+    backward_src = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
+    backward_dst = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
+    backward_ts = static_cast<uint64_t *>(mi_malloc(sizeof(uint64_t) * edge_num));
+    backward_value = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
+    backward_edge_index = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num + 1));
+
+//    account = tbb::scalable_allocator<uint64_t>().allocate(account_num);
+//    forward = tbb::scalable_allocator<Transfer>().allocate(edge_num);
+//    forward_src = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
+//    forward_edge_index = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
+//    forward_dst = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
+//    forward_ts = tbb::scalable_allocator<uint64_t>().allocate(edge_num);
+//    forward_value = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
+//
+//    backward_src = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
+//    backward_dst = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
+//    backward_ts = tbb::scalable_allocator<uint64_t>().allocate(edge_num);
+//    backward_value = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
+//
+//    backward_edge_index = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
 
     auto *beg = account_data;
     id_map.reserve(account_num);
@@ -508,7 +523,7 @@ int main(int argc, char *argv[]) {
     std::cout << "edge_num: " << line_counter[thread_num] << std::endl;
     std::cout << "GetLineOffset cost " << Duration(time_begin) << "ms" << std::endl;
 
-    forward = static_cast<Transfer *>(malloc(sizeof(Transfer) * edge_num));
+
     auto get_transfer = [&](size_t tid, off_t beg, off_t end) {
         auto task_begin = trans_data + beg;
         auto task_end = trans_data + end;
@@ -575,8 +590,6 @@ int main(int argc, char *argv[]) {
     time_begin = TimeNow();
 
 
-    forward_src = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num));
-    forward_edge_index = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num + 1));
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
                       [&](tbb::blocked_range<uint32_t> r) {
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
@@ -608,14 +621,6 @@ int main(int argc, char *argv[]) {
     std::cout << "Sort forward trans cost " << Duration(time_begin) << "ms" << std::endl;
     time_begin = TimeNow();
 
-    forward_dst = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num));
-    forward_ts = static_cast<uint64_t *>(malloc(sizeof(uint64_t) * edge_num));
-    forward_value = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num));
-
-    backward_src = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num));
-    backward_dst = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num));
-    backward_ts = static_cast<uint64_t *>(malloc(sizeof(uint64_t) * edge_num));
-    backward_value = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num));
 
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
                       [&](tbb::blocked_range<uint32_t> r) {
@@ -643,7 +648,7 @@ int main(int argc, char *argv[]) {
     std::cout << "Sort back trans cost " << Duration(time_begin) << "ms" << std::endl;
     time_begin = TimeNow();
 
-    backward_edge_index = static_cast<uint32_t *>(malloc(sizeof(uint32_t) * edge_num + 1));
+
     backward_edge_index[0] = 0;
     tbb::parallel_for(tbb::blocked_range<uint32_t>(1, edge_num),
                       [&](tbb::blocked_range<uint32_t> r) {
@@ -657,32 +662,40 @@ int main(int argc, char *argv[]) {
     std::cout << "Sort back index cost " << Duration(time_begin) << "ms" << std::endl;
     time_begin = TimeNow();
 
-
-    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
-                      [&](tbb::blocked_range<uint32_t> r) {
+    CounterType counter(4);
+    tbb::affinity_partitioner ap;
+    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num, 10000),
+                      [&](tbb::blocked_range<uint32_t> &r) {
                           auto back_rec = new BackRec[10000];
                           auto in_back = new bool[account_num]{};
                           char local_res[300];
+                          CounterType::reference my_counter = counter.local();
                           uint32_t back_recode_num = 0;
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
                               BackFindThree(i, back_rec, in_back, back_recode_num);
                               if (back_recode_num == 0) {
                                   continue;
                               }
-                              ForwardFindThree(i, back_rec, in_back, local_res, back_recode_num);
+                              ForwardFindThree(i, back_rec, in_back, local_res, back_recode_num, my_counter);
                           }
                           delete[]back_rec;
                           delete[]in_back;
-                      });
+                      }, ap);
 
+    std::vector<uint32_t> cyclye_num(4, 0);
+    for (auto &item:counter) {
+        cyclye_num[0] += item[0];
+        cyclye_num[1] += item[1];
+        cyclye_num[2] += item[2];
+        cyclye_num[3] += item[3];
+    }
     std::cout <<
-              cycyle_num_len_3.load() << " " <<
-              cycyle_num_len_4.load() << " " <<
-              cycyle_num_len_5.load() << " " <<
-              cycyle_num_len_6.load() << std::endl;
+              cyclye_num[0] << " " <<
+              cyclye_num[1] << " " <<
+              cyclye_num[2] << " " <<
+              cyclye_num[3] << std::endl;
 
-    auto cycyle_num = cycyle_num_len_3.load() + cycyle_num_len_4.load() +
-                      cycyle_num_len_5.load() + cycyle_num_len_6.load();
+    auto cycyle_num = std::accumulate(cyclye_num.begin(), cyclye_num.end(), 0U);;
     std::cout << "cycle total num: " << cycyle_num << std::endl;
     std::cout << "Find cycle cost " << Duration(time_begin) << "ms" << std::endl;
     time_begin = TimeNow();
