@@ -21,15 +21,15 @@ public:
         }
 
         ~PerfRaii() {
-            auto count = std::chrono::duration<double, std::milli>(TimeNow() - birth_day).count();
-            if (name_to_time.find(name) == name_to_time.end()) {
-                name_to_time[name] = count;
-            } else {
-                name_to_time[name] += count;
-            }
-//            std::cout << "[PERF_INFO] " << name << " cost: "
-//                      << std::chrono::duration<double, std::milli>(TimeNow() - birth_day).count()
-//                      << " ms." << std::endl;
+//            auto count = std::chrono::duration<double, std::milli>(TimeNow() - birth_day).count();
+//            if (name_to_time.find(name) == name_to_time.end()) {
+//                name_to_time[name] = count;
+//            } else {
+//                name_to_time[name] += count;
+//            }
+            std::cout << "[PERF_INFO] " << name << " cost: "
+                      << std::chrono::duration<double, std::milli>(TimeNow() - birth_day).count()
+                      << " ms." << std::endl;
         }
 
         static void Report(){
