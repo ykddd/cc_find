@@ -20,5 +20,5 @@ INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/third_party/mimalloc/include)
 
 add_executable(cycle_detect main.cpp ${SRCS})
 
-TARGET_LINK_LIBRARIES(cycle_detect -ltbb -lmimmalloc)
+TARGET_LINK_LIBRARIES(cycle_detect -ltbb -lmimalloc)
 

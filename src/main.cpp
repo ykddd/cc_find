@@ -124,113 +124,60 @@ auto res_data = new char[335620 * 300];
     }                                          \
     ++cur;                                     \
 
-#define IfTrueThenDo(cond, ...)      \
-    if (cond) {                      \
-     __VA_ARGS__;                    \
-}
 
-
-void ExportResImpl(uint32_t *res_index, char *tmp_buffer,
-                   uint32_t &buf_idx, uint32_t cur_idx) {
-    auto tmp = res_index[cur_idx + 1];
-    tmp_buffer[buf_idx++] = '(';
-    if (cur_idx == 0) {
-        buf_idx += StrUtils::u64toa_jeaiii(account[res_index[cur_idx]], tmp_buffer + buf_idx);
-    } else {
-        buf_idx += StrUtils::u64toa_jeaiii(account[forward_dst[res_index[cur_idx]]], tmp_buffer + buf_idx);
-    }
-    tmp_buffer[buf_idx++] = ')';
-    tmp_buffer[buf_idx++] = '-';
-    tmp_buffer[buf_idx++] = '[';
-    buf_idx += StrUtils::u64toa_jeaiii(forward_ts[tmp], tmp_buffer + buf_idx);
-    tmp_buffer[buf_idx++] = ',';
-    buf_idx += StrUtils::u64toa_jeaiii(forward_value[tmp] / 100U, tmp_buffer + buf_idx);
-    tmp_buffer[buf_idx++] = '.';
-    auto x = forward_value[tmp] % 100U;
+void MakeForwardRes(uint32_t index, uint32_t &offset, char *res) {
+    res[offset++] = '-';
+    res[offset++] = '[';
+    offset += StrUtils::u64toa_jeaiii(forward_ts[index], res + offset);
+    res[offset++] = ',';
+    offset += StrUtils::u64toa_jeaiii(forward_value[index] / 100U, res + offset);
+    res[offset++] = '.';
+    auto x = forward_value[index] % 100U;
     if (x < 10) {
-        tmp_buffer[buf_idx++] = '0';
+        res[offset++] = '0';
     }
-    buf_idx += StrUtils::u64toa_jeaiii(x, tmp_buffer + buf_idx);
-    tmp_buffer[buf_idx++] = ']';
-    tmp_buffer[buf_idx++] = '-';
-    tmp_buffer[buf_idx++] = '>';
+    offset += StrUtils::u64toa_jeaiii(x, res + offset);
+    res[offset++] = ']';
+    res[offset++] = '-';
+    res[offset++] = '>';
+    res[offset++] = '(';
+    offset += StrUtils::u64toa_jeaiii(account[forward_dst[index]], res + offset);
+    res[offset++] = ')';
+
 }
 
-void ExportRes(uint32_t *res_index,
-               uint32_t cycle_len, char *tmp_buffer) {
-//    PerfThis(__FUNCTION__);
-    //(10)-[100,10.50]->(11)-[102,11.52]->(12)-[104,11.54]->(10)
-    uint32_t buf_idx = 0;
-    for (size_t i = 0; i < cycle_len; ++i) {
-        ExportResImpl(res_index, tmp_buffer, buf_idx, i);
-    }
-    tmp_buffer[buf_idx++] = '(';
-    buf_idx += StrUtils::u64toa_jeaiii(account[res_index[0]], tmp_buffer + buf_idx);
-    tmp_buffer[buf_idx++] = ')';
-    tmp_buffer[buf_idx++] = '\n';
-    off_t cur_res_offset = res_buff_offset.fetch_and_add(buf_idx);
-    memcpy(res_data + cur_res_offset, tmp_buffer, buf_idx);
-}
-
-
-void ExportResWithBackRec(uint32_t *res_index,
-                          uint32_t cycle_len, char *tmp_buffer) {
-    uint32_t buf_idx = 0;
-    for (size_t i = 0; i < cycle_len - 3; ++i) {
-        auto tmp = res_index[i + 1];
-        tmp_buffer[buf_idx++] = '(';
-        if (i == 0) {
-            buf_idx += StrUtils::u64toa_jeaiii(account[res_index[i]], tmp_buffer + buf_idx);
-        } else {
-            buf_idx += StrUtils::u64toa_jeaiii(account[forward_dst[res_index[i]]], tmp_buffer + buf_idx);
-        }
-        tmp_buffer[buf_idx++] = ')';
-        tmp_buffer[buf_idx++] = '-';
-        tmp_buffer[buf_idx++] = '[';
-        buf_idx += StrUtils::u64toa_jeaiii(forward_ts[tmp], tmp_buffer + buf_idx);
-        tmp_buffer[buf_idx++] = ',';
-        buf_idx += StrUtils::u64toa_jeaiii(forward_value[tmp] / 100U, tmp_buffer + buf_idx);
-        tmp_buffer[buf_idx++] = '.';
-        auto x = forward_value[tmp] % 100U;
+uint32_t MakeBackwardRes(BackRec &back_rec, uint32_t offset, char *res, uint32_t cur_node) {
+    auto f = [&](uint32_t idx){
+        res[offset++] = '-';
+        res[offset++] = '[';
+        offset += StrUtils::u64toa_jeaiii(backward_ts[idx], res + offset);
+        res[offset++] = ',';
+        offset += StrUtils::u64toa_jeaiii(backward_value[idx] / 100U, res + offset);
+        res[offset++] = '.';
+        auto x = backward_value[idx] % 100U;
         if (x < 10) {
-            tmp_buffer[buf_idx++] = '0';
+            res[offset++] = '0';
         }
-        buf_idx += StrUtils::u64toa_jeaiii(x, tmp_buffer + buf_idx);
-        tmp_buffer[buf_idx++] = ']';
-        tmp_buffer[buf_idx++] = '-';
-        tmp_buffer[buf_idx++] = '>';
-    }
-    for (size_t i = cycle_len - 3; i < cycle_len; ++i) {
-        auto tmp = res_index[i + 1];
-        tmp_buffer[buf_idx++] = '(';
-        if (i == cycle_len - 3) {
-            buf_idx += StrUtils::u64toa_jeaiii(account[forward_dst[res_index[i]]], tmp_buffer + buf_idx);
-        } else {
-            buf_idx += StrUtils::u64toa_jeaiii(account[backward_dst[tmp]], tmp_buffer + buf_idx);
-        }
-        tmp_buffer[buf_idx++] = ')';
-        tmp_buffer[buf_idx++] = '-';
-        tmp_buffer[buf_idx++] = '[';
-        buf_idx += StrUtils::u64toa_jeaiii(backward_ts[tmp], tmp_buffer + buf_idx);
-        tmp_buffer[buf_idx++] = ',';
-        buf_idx += StrUtils::u64toa_jeaiii(backward_value[tmp] / 100U, tmp_buffer + buf_idx);
-        tmp_buffer[buf_idx++] = '.';
-        auto x = backward_value[tmp] % 100U;
-        if (x < 10) {
-            tmp_buffer[buf_idx++] = '0';
-        }
-        buf_idx += StrUtils::u64toa_jeaiii(x, tmp_buffer + buf_idx);
-        tmp_buffer[buf_idx++] = ']';
-        tmp_buffer[buf_idx++] = '-';
-        tmp_buffer[buf_idx++] = '>';
-    }
-    tmp_buffer[buf_idx++] = '(';
-    buf_idx += StrUtils::u64toa_jeaiii(account[res_index[0]], tmp_buffer + buf_idx);
-    tmp_buffer[buf_idx++] = ')';
-    tmp_buffer[buf_idx++] = '\n';
-    off_t cur_res_offset = res_buff_offset.fetch_and_add(buf_idx);
-    memcpy(res_data + cur_res_offset, tmp_buffer, buf_idx);
+        offset += StrUtils::u64toa_jeaiii(x, res + offset);
+        res[offset++] = ']';
+        res[offset++] = '-';
+        res[offset++] = '>';
+        res[offset++] = '(';
+    };
+    f(back_rec.b1_idx);
+    offset += StrUtils::u64toa_jeaiii(account[backward_dst[back_rec.b2_idx]], res + offset);
+    res[offset++] = ')';
+    f(back_rec.b2_idx);
+    offset += StrUtils::u64toa_jeaiii(account[backward_dst[back_rec.b3_idx]], res + offset);
+    res[offset++] = ')';
+    f(back_rec.b3_idx);
+    offset += StrUtils::u64toa_jeaiii(account[cur_node], res + offset);
+    res[offset++] = ')';
+
+    res[offset++] = '\n';
+    return offset;
 }
+
 
 void BackFindThree(uint32_t cur_node, BackRec *back_rec,
                    bool *in_back, uint32_t &back_recode_num) {
@@ -266,14 +213,23 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
     uint32_t forward_amt_1_top, forward_amt_2_top, forward_amt_3_top;
     uint32_t forward_amt_1_bottom, forward_amt_2_bottom, forward_amt_3_bottom;
     uint64_t forward_ts_1, forward_ts_2, forward_ts_3;
-    auto res_index = new uint32_t[7];
-    res_index[0] = cur_node;
+
+    local_res[0] = '(';
+    uint32_t first_node_res_len = StrUtils::u64toa_jeaiii(account[cur_node], local_res + 1) + 1;
+    local_res[first_node_res_len++] = ')';
+
+    auto tmp_buffer = local_res + first_node_res_len;
+    uint32_t tmp_res_len;
+
+
     for (uint32_t i = forward_edge_index[cur_node]; i < forward_edge_index[cur_node + 1]; ++i) {
         node_1 = forward_dst[i];
         forward_ts_1 = forward_ts[i];
 
         if (in_back[node_1]) {
-            res_index[1] = i;
+            tmp_res_len = 0;
+            MakeForwardRes(i, tmp_res_len, tmp_buffer);
+
             forward_amt_1_top = forward_value[i] * 11;
             forward_amt_1_bottom = forward_value[i] * 9;
             for (j = 0; j < back_recode_num; ++j) {
@@ -284,10 +240,9 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                     forward_amt_1_top < backward_value[tmp_back.b1_idx] * 10) {
                     continue;
                 }
-                res_index[2] = tmp_back.b1_idx;
-                res_index[3] = tmp_back.b2_idx;
-                res_index[4] = tmp_back.b3_idx;
-                ExportResWithBackRec(res_index, 4, local_res);
+                auto tmp_len = MakeBackwardRes(tmp_back, tmp_res_len, tmp_buffer, cur_node) + first_node_res_len;
+                off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_len);
+                memcpy(res_data + cur_res_offset, local_res, tmp_len);
                 ++counter[1];
             }
         }
@@ -304,8 +259,11 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
             if (in_back[node_2]) {
                 forward_amt_2_top = forward_value[j] * 11;
                 forward_amt_2_bottom = forward_value[j] * 9;
-                res_index[1] = i;
-                res_index[2] = j;
+
+                tmp_res_len = 0;
+                MakeForwardRes(i, tmp_res_len, tmp_buffer);
+                MakeForwardRes(j, tmp_res_len, tmp_buffer);
+
                 for (k = 0; k < back_recode_num; ++k) {
                     BackRec &tmp_back = back_rec[k];
                     if (tmp_back.back_node != node_2 ||
@@ -316,10 +274,9 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                         backward_dst[tmp_back.b3_idx] == node_1) {
                         continue;
                     }
-                    res_index[3] = tmp_back.b1_idx;
-                    res_index[4] = tmp_back.b2_idx;
-                    res_index[5] = tmp_back.b3_idx;
-                    ExportResWithBackRec(res_index, 5, local_res);
+                    auto tmp_len = MakeBackwardRes(tmp_back, tmp_res_len, tmp_buffer, cur_node) + first_node_res_len;
+                    off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_len);
+                    memcpy(res_data + cur_res_offset, local_res, tmp_len);
                     ++counter[2];
                 }
             }
@@ -331,19 +288,25 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                 node_3 = forward_dst[k];
                 if (!in_back[node_3] || node_3 == node_1) { continue; }
 
-                IfTrueThenDo(node_3 == cur_node,
-                             res_index[1] = i;
-                                     res_index[2] = j;
-                                     res_index[3] = k;
-                                     ExportRes(res_index, 3, local_res);
-                                     ++counter[0];
-                                     continue;)
+                if (node_3 == cur_node) {
+                    tmp_res_len = 0;
+                    MakeForwardRes(i, tmp_res_len, tmp_buffer);
+                    MakeForwardRes(j, tmp_res_len, tmp_buffer);
+                    MakeForwardRes(k, tmp_res_len, tmp_buffer);
+                    tmp_buffer[tmp_res_len++] = '\n';
+                    off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_res_len + first_node_res_len);
+                    memcpy(res_data + cur_res_offset, local_res, tmp_res_len + first_node_res_len);
+                    ++counter[0];
+                    continue;
+                }
                 forward_ts_3 = forward_ts[k];
                 forward_amt_3_top = forward_value[k] * 11;
                 forward_amt_3_bottom = forward_value[k] * 9;
-                res_index[1] = i;
-                res_index[2] = j;
-                res_index[3] = k;
+
+                tmp_res_len = 0;
+                MakeForwardRes(i, tmp_res_len, tmp_buffer);
+                MakeForwardRes(j, tmp_res_len, tmp_buffer);
+                MakeForwardRes(k, tmp_res_len, tmp_buffer);
                 for (m = 0; m < back_recode_num; ++m) {
                     BackRec &tmp_back = back_rec[m];
                     if (tmp_back.back_node != node_3 ||
@@ -356,10 +319,9 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                         backward_dst[tmp_back.b3_idx] == node_2) {
                         continue;
                     }
-                    res_index[4] = tmp_back.b1_idx;
-                    res_index[5] = tmp_back.b2_idx;
-                    res_index[6] = tmp_back.b3_idx;
-                    ExportResWithBackRec(res_index, 6, local_res);
+                    auto tmp_len = MakeBackwardRes(tmp_back, tmp_res_len, tmp_buffer, cur_node) + first_node_res_len;
+                    off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_len);
+                    memcpy(res_data + cur_res_offset, local_res, tmp_len);
                     ++counter[3];
                 }
             }
@@ -377,11 +339,11 @@ int main(int argc, char *argv[]) {
     tbb::global_control c(tbb::global_control::max_allowed_parallelism, thread_num);
     std::cout << thread_num << std::endl;
 
-//    char res_file[] = "./result.csv";
+    char res_file[] = "./result.csv";
 //    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/test/test.csv";
 //    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/test/account.csv";
-//    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/transfer.csv";
-//    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/account.csv";
+    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/transfer.csv";
+    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/account.csv";
 //    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/transfer.csv";
 //    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/account.csv";
 //
@@ -390,9 +352,9 @@ int main(int argc, char *argv[]) {
 //        return 0;
 //    }
 //
-    auto account_file = argv[1];
-    auto trans_file = argv[2];
-    auto res_file = argv[3];
+//    auto account_file = argv[1];
+//    auto trans_file = argv[2];
+//    auto res_file = argv[3];
 
     auto account_fd = open(account_file, O_RDONLY);
     auto account_file_len = lseek(account_fd, 0, SEEK_END);
@@ -412,26 +374,27 @@ int main(int argc, char *argv[]) {
 
 
     mi_option_enable(mi_option_t::mi_option_large_os_pages);
+    auto alignment = 8;
+    account = static_cast<uint64_t *>(mi_malloc_aligned(sizeof(uint64_t) * account_num, alignment));
+    forward = static_cast<Transfer *>(mi_malloc_aligned(sizeof(Transfer) * edge_num, alignment));
+    forward_src = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
+    forward_edge_index = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
+    forward_dst = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
+    forward_ts = static_cast<uint64_t *>(mi_malloc_aligned(sizeof(uint64_t) * edge_num, alignment));
+    forward_value = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
 
-    account = static_cast<uint64_t *>(mi_malloc(sizeof(uint64_t) * account_num));
-    forward = static_cast<Transfer *>(mi_malloc(sizeof(Transfer) * edge_num));
-    forward_src = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
-    forward_edge_index = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
-    forward_dst = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
-    forward_ts = static_cast<uint64_t *>(mi_malloc(sizeof(uint64_t) * edge_num));
-    forward_value = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
+    backward = static_cast<Transfer *>(mi_malloc_aligned(sizeof(Transfer) * edge_num, alignment));
+    backward_src = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
+    backward_dst = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
+    backward_ts = static_cast<uint64_t *>(mi_malloc_aligned(sizeof(uint64_t) * edge_num, alignment));
+    backward_value = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
+    backward_edge_index = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
 
-    backward_src = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
-    backward_dst = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
-    backward_ts = static_cast<uint64_t *>(mi_malloc(sizeof(uint64_t) * edge_num));
-    backward_value = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * edge_num));
-    backward_edge_index = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
+    forward_prune_index_beg = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
+    forward_prune_index_end = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
 
-    forward_prune_index_beg = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
-    forward_prune_index_end = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
-
-    backward_prune_index_beg = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
-    backward_prune_index_end = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
+    backward_prune_index_beg = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
+    backward_prune_index_end = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
 
 //    account = tbb::scalable_allocator<uint64_t>().allocate(account_num);
 //    forward = tbb::scalable_allocator<Transfer>().allocate(edge_num);
@@ -457,7 +420,8 @@ int main(int argc, char *argv[]) {
     account_thread_offset = new uint32_t *[thread_num + 1];
     for (auto i = 0; i < thread_num + 1; ++i) {
 //        account_thread_offset[i] = tbb::scalable_allocator<uint32_t>().allocate(account_num + 1);
-        account_thread_offset[i] =  static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (account_num + 1)));
+        account_thread_offset[i] = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (account_num + 1),
+                                                                             alignment));
     }
 
     auto *beg = account_data;
@@ -591,11 +555,12 @@ int main(int argc, char *argv[]) {
 
     auto account_offset = account_thread_offset[thread_num];
     auto build_backward = [&](size_t tid, uint32_t beg, uint32_t end) {
+        auto cur_offset = ++account_thread_offset[tid];
         for (uint32_t line = beg; line < end; ++line) {
             auto &cur_forward = forward[line];
             auto dst_id = cur_forward.dst_id;
-            backward[account_thread_offset[tid][dst_id + 1] + account_offset[dst_id]] = cur_forward;
-            account_thread_offset[tid][dst_id + 1]++;
+            backward[cur_offset[dst_id] + account_offset[dst_id]] = cur_forward;
+            cur_offset[dst_id]++;
         }
     };
     threads.clear();
