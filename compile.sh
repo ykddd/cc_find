@@ -1,4 +1,4 @@
-MYDIR=`pwd`/src
+MYDIR=`pwd`/cc_find
 cd $MYDIR/third_party/tbb
 echo $MYDIR
 pwd

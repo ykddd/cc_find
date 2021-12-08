@@ -10,7 +10,7 @@ message(${PROJECT_SOURCE_DIR})
 SET(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} " -pthread")
 LINK_DIRECTORIES(${PROJECT_SOURCE_DIR}/third_party/tbb/build/)
 LINK_DIRECTORIES(${PROJECT_SOURCE_DIR}/third_party/mimalloc/build/)
-#SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 FILE(GLOB INC_SRC ${PROJECT_SOURCE_DIR}/inc/*.cpp)
 SET(SRCS ${INC_SRC})
 
@@ -20,5 +20,5 @@ INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/third_party/mimalloc/include)
 
 add_executable(cycle_detect main.cpp ${SRCS})
 
-TARGET_LINK_LIBRARIES(cycle_detect -ltbb -lmimalloc)
+TARGET_LINK_LIBRARIES(cycle_detect -ltbb -ltbbmalloc -lmimalloc)
 

@@ -7,30 +7,24 @@
 #include "perf_utils.h"
 #include "flat_hash_map.h"
 #include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
 #include "tbb/global_control.h"
-#include "tbb/cache_aligned_allocator.h"
-#include "tbb/scalable_allocator.h"
+
+#define TBB_PREVIEW_MEMORY_POOL 1
+
+#include "tbb/memory_pool.h"
 #include "tbb/task_scheduler_init.h"
 #include "tbb/enumerable_thread_specific.h"
-#include "tbb/iterators.h"
-#include "tbb/parallel_sort.h"
 #include "string_utils.h"
 #include "mimalloc.h"
 
 
 #include <fcntl.h>
-#include <set>
-#include <sys/types.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <iostream>
 #include <chrono>
-#include <numeric>
 #include <vector>
 #include <thread>
-#include <cmath>
-#include <array>
 
 
 constexpr char lf = '\n';
@@ -90,19 +84,11 @@ tsl::robin_map<uint64_t, uint32_t> id_map;
 uint64_t *account;
 Transfer *forward;
 
-uint32_t *forward_src;
-uint32_t *forward_dst;
-uint32_t *forward_value;
-uint64_t *forward_ts;
 uint32_t *forward_edge_index;
 uint32_t *forward_prune_index_beg;
 uint32_t *forward_prune_index_end;
 
 Transfer *backward;
-uint32_t *backward_src;
-uint32_t *backward_dst;
-uint32_t *backward_value;
-uint64_t *backward_ts;
 uint32_t *backward_edge_index;
 uint32_t *backward_prune_index_beg;
 uint32_t *backward_prune_index_end;
@@ -112,10 +98,7 @@ uint32_t **account_thread_offset;
 
 tbb::atomic<off_t> res_buff_offset{0};
 
-auto res_data = new char[335620 * 300];
-
-#define TimeNow() std::chrono::steady_clock::now()
-#define Duration(beg) std::chrono::duration<double, std::milli>(TimeNow() - beg).count()
+char *res_data;
 
 #define GET_UINT64(num, cur, deli)             \
     num = 0;                                   \
@@ -126,13 +109,14 @@ auto res_data = new char[335620 * 300];
 
 
 void MakeForwardRes(uint32_t index, uint32_t &offset, char *res) {
+    auto &tmp = forward[index];
     res[offset++] = '-';
     res[offset++] = '[';
-    offset += StrUtils::u64toa_jeaiii(forward_ts[index], res + offset);
+    offset += StrUtils::u64toa_jeaiii(tmp.time_stamp, res + offset);
     res[offset++] = ',';
-    offset += StrUtils::u64toa_jeaiii(forward_value[index] / 100U, res + offset);
+    offset += StrUtils::u64toa_jeaiii(tmp.amount / 100U, res + offset);
     res[offset++] = '.';
-    auto x = forward_value[index] % 100U;
+    auto x = tmp.amount % 100U;
     if (x < 10) {
         res[offset++] = '0';
     }
@@ -141,20 +125,21 @@ void MakeForwardRes(uint32_t index, uint32_t &offset, char *res) {
     res[offset++] = '-';
     res[offset++] = '>';
     res[offset++] = '(';
-    offset += StrUtils::u64toa_jeaiii(account[forward_dst[index]], res + offset);
+    offset += StrUtils::u64toa_jeaiii(account[tmp.dst_id], res + offset);
     res[offset++] = ')';
 
 }
 
 uint32_t MakeBackwardRes(BackRec &back_rec, uint32_t offset, char *res, uint32_t cur_node) {
-    auto f = [&](uint32_t idx){
+    auto f = [&](uint32_t idx) {
+        auto &tmp = backward[idx];
         res[offset++] = '-';
         res[offset++] = '[';
-        offset += StrUtils::u64toa_jeaiii(backward_ts[idx], res + offset);
+        offset += StrUtils::u64toa_jeaiii(tmp.time_stamp, res + offset);
         res[offset++] = ',';
-        offset += StrUtils::u64toa_jeaiii(backward_value[idx] / 100U, res + offset);
+        offset += StrUtils::u64toa_jeaiii(tmp.amount / 100U, res + offset);
         res[offset++] = '.';
-        auto x = backward_value[idx] % 100U;
+        auto x = tmp.amount % 100U;
         if (x < 10) {
             res[offset++] = '0';
         }
@@ -165,10 +150,10 @@ uint32_t MakeBackwardRes(BackRec &back_rec, uint32_t offset, char *res, uint32_t
         res[offset++] = '(';
     };
     f(back_rec.b1_idx);
-    offset += StrUtils::u64toa_jeaiii(account[backward_dst[back_rec.b2_idx]], res + offset);
+    offset += StrUtils::u64toa_jeaiii(account[backward[back_rec.b2_idx].src_id], res + offset);
     res[offset++] = ')';
     f(back_rec.b2_idx);
-    offset += StrUtils::u64toa_jeaiii(account[backward_dst[back_rec.b3_idx]], res + offset);
+    offset += StrUtils::u64toa_jeaiii(account[backward[back_rec.b3_idx].src_id], res + offset);
     res[offset++] = ')';
     f(back_rec.b3_idx);
     offset += StrUtils::u64toa_jeaiii(account[cur_node], res + offset);
@@ -188,17 +173,17 @@ void BackFindThree(uint32_t cur_node, BackRec *back_rec,
     }
     back_recode_num = 0;
     for (uint32_t i = backward_edge_index[cur_node]; i < backward_edge_index[cur_node + 1]; ++i) {
-        node_1 = backward_dst[i];
+        node_1 = backward[i].src_id;
         for (j = backward_prune_index_beg[i]; j < backward_prune_index_end[i]; ++j) {
-            if (backward_ts[j] > backward_ts[i] || backward_dst[j] == cur_node) {
+            if (backward[j].time_stamp > backward[i].time_stamp || backward[j].src_id == cur_node) {
                 continue;
             }
             for (k = backward_prune_index_beg[j]; k < backward_prune_index_end[j]; ++k) {
-                if (backward_ts[k] > backward_ts[j] || backward_dst[k] == node_1) {
+                if (backward[k].time_stamp > backward[j].time_stamp || backward[k].src_id == node_1) {
                     continue;
                 }
-                back_rec[back_recode_num++].SetRec(backward_dst[k], k, j, i);
-                in_back[backward_dst[k]] = true;
+                back_rec[back_recode_num++].SetRec(backward[k].src_id, k, j, i);
+                in_back[backward[k].src_id] = true;
             }
         }
     }
@@ -206,8 +191,7 @@ void BackFindThree(uint32_t cur_node, BackRec *back_rec,
 
 void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                       bool *in_back, char *local_res,
-                      uint32_t back_recode_num,
-                      CounterType::reference counter) {
+                      uint32_t back_recode_num) {
     uint32_t node_1, node_2, node_3;
     uint32_t j, k, m;
     uint32_t forward_amt_1_top, forward_amt_2_top, forward_amt_3_top;
@@ -223,42 +207,42 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
 
 
     for (uint32_t i = forward_edge_index[cur_node]; i < forward_edge_index[cur_node + 1]; ++i) {
-        node_1 = forward_dst[i];
-        forward_ts_1 = forward_ts[i];
+        node_1 = forward[i].dst_id;
+        forward_ts_1 = forward[i].time_stamp;
 
         if (in_back[node_1]) {
             tmp_res_len = 0;
             MakeForwardRes(i, tmp_res_len, tmp_buffer);
 
-            forward_amt_1_top = forward_value[i] * 11;
-            forward_amt_1_bottom = forward_value[i] * 9;
+            forward_amt_1_top = forward[i].amount * 11;
+            forward_amt_1_bottom = forward[i].amount * 9;
             for (j = 0; j < back_recode_num; ++j) {
                 BackRec &tmp_back = back_rec[j];
                 if (tmp_back.back_node != node_1 ||
-                    forward_ts_1 > backward_ts[tmp_back.b1_idx] ||
-                    forward_amt_1_bottom > backward_value[tmp_back.b1_idx] * 10 ||
-                    forward_amt_1_top < backward_value[tmp_back.b1_idx] * 10) {
+                    forward_ts_1 > backward[tmp_back.b1_idx].time_stamp ||
+                    forward_amt_1_bottom > backward[tmp_back.b1_idx].amount * 10 ||
+                    forward_amt_1_top < backward[tmp_back.b1_idx].amount * 10) {
                     continue;
                 }
                 auto tmp_len = MakeBackwardRes(tmp_back, tmp_res_len, tmp_buffer, cur_node) + first_node_res_len;
                 off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_len);
                 memcpy(res_data + cur_res_offset, local_res, tmp_len);
-                ++counter[1];
+//                ++counter[1];
             }
         }
         for (j = forward_prune_index_beg[i]; j < forward_prune_index_end[i]; ++j) {
-            if (forward_ts[j] < forward_ts_1) {
+            if (forward[j].time_stamp < forward_ts_1) {
                 continue;
             }
-            node_2 = forward_dst[j];
+            node_2 = forward[j].dst_id;
             if (node_2 == cur_node) {
                 continue;
             }
-            forward_ts_2 = forward_ts[j];
+            forward_ts_2 = forward[j].time_stamp;
 
             if (in_back[node_2]) {
-                forward_amt_2_top = forward_value[j] * 11;
-                forward_amt_2_bottom = forward_value[j] * 9;
+                forward_amt_2_top = forward[j].amount * 11;
+                forward_amt_2_bottom = forward[j].amount * 9;
 
                 tmp_res_len = 0;
                 MakeForwardRes(i, tmp_res_len, tmp_buffer);
@@ -267,25 +251,25 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                 for (k = 0; k < back_recode_num; ++k) {
                     BackRec &tmp_back = back_rec[k];
                     if (tmp_back.back_node != node_2 ||
-                        forward_ts_2 > backward_ts[tmp_back.b1_idx] ||
-                        forward_amt_2_bottom > backward_value[tmp_back.b1_idx] * 10 ||
-                        forward_amt_2_top < backward_value[tmp_back.b1_idx] * 10 ||
-                        backward_dst[tmp_back.b2_idx] == node_1 ||
-                        backward_dst[tmp_back.b3_idx] == node_1) {
+                        forward_ts_2 > backward[tmp_back.b1_idx].time_stamp ||
+                        forward_amt_2_bottom > backward[tmp_back.b1_idx].amount * 10 ||
+                        forward_amt_2_top < backward[tmp_back.b1_idx].amount * 10 ||
+                        backward[tmp_back.b2_idx].src_id == node_1 ||
+                        backward[tmp_back.b3_idx].src_id == node_1) {
                         continue;
                     }
                     auto tmp_len = MakeBackwardRes(tmp_back, tmp_res_len, tmp_buffer, cur_node) + first_node_res_len;
                     off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_len);
                     memcpy(res_data + cur_res_offset, local_res, tmp_len);
-                    ++counter[2];
+//                    ++counter[2];
                 }
             }
 
             for (k = forward_prune_index_beg[j]; k < forward_prune_index_end[j]; ++k) {
-                if (forward_ts[k] < forward_ts_2) {
+                if (forward[k].time_stamp < forward_ts_2) {
                     continue;
                 }
-                node_3 = forward_dst[k];
+                node_3 = forward[k].dst_id;
                 if (!in_back[node_3] || node_3 == node_1) { continue; }
 
                 if (node_3 == cur_node) {
@@ -296,12 +280,12 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                     tmp_buffer[tmp_res_len++] = '\n';
                     off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_res_len + first_node_res_len);
                     memcpy(res_data + cur_res_offset, local_res, tmp_res_len + first_node_res_len);
-                    ++counter[0];
+//                    ++counter[0];
                     continue;
                 }
-                forward_ts_3 = forward_ts[k];
-                forward_amt_3_top = forward_value[k] * 11;
-                forward_amt_3_bottom = forward_value[k] * 9;
+                forward_ts_3 = forward[k].time_stamp;
+                forward_amt_3_top = forward[k].amount * 11;
+                forward_amt_3_bottom = forward[k].amount * 9;
 
                 tmp_res_len = 0;
                 MakeForwardRes(i, tmp_res_len, tmp_buffer);
@@ -310,19 +294,19 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
                 for (m = 0; m < back_recode_num; ++m) {
                     BackRec &tmp_back = back_rec[m];
                     if (tmp_back.back_node != node_3 ||
-                        forward_ts_3 > backward_ts[tmp_back.b1_idx] ||
-                        forward_amt_3_bottom > backward_value[tmp_back.b1_idx] * 10 ||
-                        forward_amt_3_top < backward_value[tmp_back.b1_idx] * 10 ||
-                        backward_dst[tmp_back.b2_idx] == node_1 ||
-                        backward_dst[tmp_back.b3_idx] == node_1 ||
-                        backward_dst[tmp_back.b2_idx] == node_2 ||
-                        backward_dst[tmp_back.b3_idx] == node_2) {
+                        forward_ts_3 > backward[tmp_back.b1_idx].time_stamp ||
+                        forward_amt_3_bottom > backward[tmp_back.b1_idx].amount * 10 ||
+                        forward_amt_3_top < backward[tmp_back.b1_idx].amount * 10 ||
+                        backward[tmp_back.b2_idx].src_id == node_1 ||
+                        backward[tmp_back.b3_idx].src_id == node_1 ||
+                        backward[tmp_back.b2_idx].src_id == node_2 ||
+                        backward[tmp_back.b3_idx].src_id == node_2) {
                         continue;
                     }
                     auto tmp_len = MakeBackwardRes(tmp_back, tmp_res_len, tmp_buffer, cur_node) + first_node_res_len;
                     off_t cur_res_offset = res_buff_offset.fetch_and_add(tmp_len);
                     memcpy(res_data + cur_res_offset, local_res, tmp_len);
-                    ++counter[3];
+//                    ++counter[3];
                 }
             }
         }
@@ -331,30 +315,12 @@ void ForwardFindThree(uint32_t cur_node, BackRec *back_rec,
 
 
 int main(int argc, char *argv[]) {
-    PerfThis("Total cost");
-    auto time_begin = TimeNow();
     auto thread_num = tbb::task_scheduler_init::default_num_threads();
-//
-//    auto thread_num = 1;
     tbb::global_control c(tbb::global_control::max_allowed_parallelism, thread_num);
-    std::cout << thread_num << std::endl;
-
-    char res_file[] = "./result.csv";
-//    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/test/test.csv";
-//    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/test/account.csv";
-    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/transfer.csv";
-    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/account.csv";
-//    char trans_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/transfer.csv";
-//    char account_file[] = "/Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale10/account.csv";
-//
-//    if (argc != 4) {
-//        std::cerr << "args error!" << std::endl;
-//        return 0;
-//    }
-//
-//    auto account_file = argv[1];
-//    auto trans_file = argv[2];
-//    auto res_file = argv[3];
+    tbb::affinity_partitioner ap;
+    auto account_file = argv[1];
+    auto trans_file = argv[2];
+    auto res_file = argv[3];
 
     auto account_fd = open(account_file, O_RDONLY);
     auto account_file_len = lseek(account_fd, 0, SEEK_END);
@@ -365,63 +331,29 @@ int main(int argc, char *argv[]) {
     auto trans_data = (char *) mmap(nullptr, trans_file_len, PROT_READ, MAP_PRIVATE, trans_fd, 0);
     close(trans_fd);
 
-    std::cout << "ReadFile cost " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
-
     bool is_s1 = account_file_len == 14331229;
     account_num = is_s1 ? 998140 : 7200880;
     edge_num = is_s1 ? 28940477 : 286818003;
 
 
     mi_option_enable(mi_option_t::mi_option_large_os_pages);
-    auto alignment = 8;
-    account = static_cast<uint64_t *>(mi_malloc_aligned(sizeof(uint64_t) * account_num, alignment));
-    forward = static_cast<Transfer *>(mi_malloc_aligned(sizeof(Transfer) * edge_num, alignment));
-    forward_src = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
-    forward_edge_index = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
-    forward_dst = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
-    forward_ts = static_cast<uint64_t *>(mi_malloc_aligned(sizeof(uint64_t) * edge_num, alignment));
-    forward_value = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
+    res_data = static_cast<char *>(mi_malloc(335620 * 300));
+    account = static_cast<uint64_t *>(mi_malloc(sizeof(uint64_t) * account_num));
+    forward = static_cast<Transfer *>(mi_malloc(sizeof(Transfer) * edge_num));
+    forward_edge_index = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
 
-    backward = static_cast<Transfer *>(mi_malloc_aligned(sizeof(Transfer) * edge_num, alignment));
-    backward_src = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
-    backward_dst = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
-    backward_ts = static_cast<uint64_t *>(mi_malloc_aligned(sizeof(uint64_t) * edge_num, alignment));
-    backward_value = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * edge_num, alignment));
-    backward_edge_index = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
+    backward = static_cast<Transfer *>(mi_malloc(sizeof(Transfer) * edge_num));
+    backward_edge_index = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
 
-    forward_prune_index_beg = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
-    forward_prune_index_end = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
+    forward_prune_index_beg = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
+    forward_prune_index_end = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
 
-    backward_prune_index_beg = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
-    backward_prune_index_end = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (edge_num + 1), alignment));
+    backward_prune_index_beg = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
+    backward_prune_index_end = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (edge_num + 1)));
 
-//    account = tbb::scalable_allocator<uint64_t>().allocate(account_num);
-//    forward = tbb::scalable_allocator<Transfer>().allocate(edge_num);
-//    forward_src = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
-//    forward_edge_index = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
-//    forward_dst = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
-//    forward_ts = tbb::scalable_allocator<uint64_t>().allocate(edge_num);
-//    forward_value = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
-//
-//    forward_prune_index_beg = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
-//    forward_prune_index_end = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
-//
-//    backward = tbb::scalable_allocator<Transfer>().allocate(edge_num);
-//    backward_src = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
-//    backward_dst = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
-//    backward_ts = tbb::scalable_allocator<uint64_t>().allocate(edge_num);
-//    backward_value = tbb::scalable_allocator<uint32_t>().allocate(edge_num);
-//
-//    backward_prune_index_beg = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
-//    backward_prune_index_end = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
-//
-//    backward_edge_index = tbb::scalable_allocator<uint32_t>().allocate(edge_num + 1);
     account_thread_offset = new uint32_t *[thread_num + 1];
     for (auto i = 0; i < thread_num + 1; ++i) {
-//        account_thread_offset[i] = tbb::scalable_allocator<uint32_t>().allocate(account_num + 1);
-        account_thread_offset[i] = static_cast<uint32_t *>(mi_malloc_aligned(sizeof(uint32_t) * (account_num + 1),
-                                                                             alignment));
+        account_thread_offset[i] = static_cast<uint32_t *>(mi_malloc(sizeof(uint32_t) * (account_num + 1)));
     }
 
     auto *beg = account_data;
@@ -431,11 +363,6 @@ int main(int argc, char *argv[]) {
         id_map[account[i]] = i;
     }
     munmap(account_data, account_file_len);
-
-    std::cout << "last_account_id:" << account[account_num - 1] << std::endl;
-    std::cout << "GetAccount cost " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
-
 
     std::vector<std::thread> threads;
     auto line_counter = new uint32_t[thread_num + 1]{};
@@ -473,8 +400,6 @@ int main(int argc, char *argv[]) {
     for (size_t i = 0; i < thread_num; ++i) {
         line_counter[i + 1] += line_counter[i];
     }
-    std::cout << "edge_num: " << line_counter[thread_num] << std::endl;
-    std::cout << "GetLineOffset cost " << Duration(time_begin) << "ms" << std::endl;
 
 
     auto get_transfer = [&](size_t tid, off_t beg, off_t end) {
@@ -537,16 +462,13 @@ int main(int argc, char *argv[]) {
     }
     munmap(trans_data, trans_file_len);
 
-    std::cout << "GetTransfer cost " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
-
     for (auto i = 0; i < thread_num; ++i) {
         tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num + 1),
                           [&](tbb::blocked_range<uint32_t> r) {
                               for (uint32_t j = r.begin(); j < r.end(); ++j) {
                                   account_thread_offset[i + 1][j] += account_thread_offset[i][j];
                               }
-                          });
+                          }, ap);
     }
 
     for (auto i = 0; i < account_num; ++i) {
@@ -575,36 +497,20 @@ int main(int argc, char *argv[]) {
         thread.join();
     }
 
-    std::cout << forward[edge_num - 1].time_stamp << " " << forward[edge_num - 1].amount << std::endl;
-
-    std::cout << "Construct backward " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
-
-
-    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
-                      [&](tbb::blocked_range<uint32_t> &r) {
-                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
-                              forward_src[i] = forward[i].src_id;
-                              backward_src[i] = backward[i].dst_id;
-                          }
-                      });
 
     tbb::parallel_for(tbb::blocked_range<uint32_t>(1, edge_num),
                       [&](tbb::blocked_range<uint32_t> &r) {
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
-                              for (uint32_t j = forward_src[i - 1] + 1; j <= forward_src[i]; ++j) {
+                              for (uint32_t j = forward[i - 1].src_id + 1; j <= forward[i].src_id; ++j) {
                                   forward_edge_index[j] = i;
                               }
-                              for (uint32_t j = backward_src[i - 1] + 1; j <= backward_src[i]; ++j) {
+                              for (uint32_t j = backward[i - 1].dst_id + 1; j <= backward[i].dst_id; ++j) {
                                   backward_edge_index[j] = i;
                               }
                           }
-                      });
+                      }, ap);
     forward_edge_index[account_num] = edge_num;
     backward_edge_index[account_num] = edge_num;
-
-    std::cout << "Make forward/backward index cost " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
 
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
                       [&](tbb::blocked_range<uint32_t> &r) {
@@ -616,9 +522,7 @@ int main(int argc, char *argv[]) {
                                        backward + backward_edge_index[i + 1],
                                        [](const Transfer &it) { return it.amount; });
                           }
-                      });
-    std::cout << "Sort forward/backward trans cost " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
+                      }, ap);
 
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
                       [&](tbb::blocked_range<uint32_t> &r) {
@@ -640,7 +544,7 @@ int main(int argc, char *argv[]) {
                                   }
                               }
                           }
-                      });
+                      }, ap);
 
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
                       [&](tbb::blocked_range<uint32_t> &r) {
@@ -662,63 +566,44 @@ int main(int argc, char *argv[]) {
                                   }
                               }
                           }
-                      });
+                      }, ap);
 
-
-//    return 0;
-
-    tbb::parallel_for(tbb::blocked_range<uint32_t>(0, edge_num),
-                      [&](tbb::blocked_range<uint32_t> &r) {
-                          for (uint32_t i = r.begin(); i < r.end(); ++i) {
-                              forward_dst[i] = forward[i].dst_id;
-                              forward_ts[i] = forward[i].time_stamp;
-                              forward_value[i] = forward[i].amount;
-
-                              backward_dst[i] = backward[i].src_id;
-                              backward_ts[i] = backward[i].time_stamp;
-                              backward_value[i] = backward[i].amount;
-                          }
-                      });
-    std::cout << "Flatten trans cost " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
-
-    CounterType counter(4);
-    tbb::affinity_partitioner ap;
+//    CounterType counter(4);
+    scalable_allocation_mode(USE_HUGE_PAGES, 1);
+    tbb::memory_pool<tbb::scalable_allocator<BackRec> > backrec_pool;
+    tbb::memory_pool<tbb::scalable_allocator<bool> > bool_pool;
+    tbb::memory_pool<tbb::scalable_allocator<char> > char_pool;
     tbb::parallel_for(tbb::blocked_range<uint32_t>(0, account_num),
                       [&](tbb::blocked_range<uint32_t> &r) {
                           auto back_rec = new BackRec[2000];
                           auto in_back = new bool[account_num]{};
                           char local_res[300];
-                          CounterType::reference my_counter = counter.local();
                           uint32_t back_recode_num = 0;
                           for (uint32_t i = r.begin(); i < r.end(); ++i) {
                               BackFindThree(i, back_rec, in_back, back_recode_num);
                               if (back_recode_num == 0) {
                                   continue;
                               }
-                              ForwardFindThree(i, back_rec, in_back, local_res, back_recode_num, my_counter);
+                              ForwardFindThree(i, back_rec, in_back, local_res, back_recode_num);
                           }
                           delete[]back_rec;
                           delete[]in_back;
                       }, ap);
 
-    std::vector<uint32_t> cyclye_num(4, 0);
-    for (auto &item:counter) {
-        cyclye_num[0] += item[0];
-        cyclye_num[1] += item[1];
-        cyclye_num[2] += item[2];
-        cyclye_num[3] += item[3];
-    }
-    std::cout <<
-              cyclye_num[0] << " " <<
-              cyclye_num[1] << " " <<
-              cyclye_num[2] << " " <<
-              cyclye_num[3] << std::endl;
-
-    auto cycyle_num = std::accumulate(cyclye_num.begin(), cyclye_num.end(), 0U);;
-    std::cout << "cycle total num: " << cycyle_num << std::endl;
-    std::cout << "Find cycle cost " << Duration(time_begin) << "ms" << std::endl;
-    time_begin = TimeNow();
+//    std::vector<uint32_t> cyclye_num(4, 0);
+//    for (auto &item:counter) {
+//        cyclye_num[0] += item[0];
+//        cyclye_num[1] += item[1];
+//        cyclye_num[2] += item[2];
+//        cyclye_num[3] += item[3];
+//    }
+//    std::cout << cyclye_num[0] << " "
+//              << cyclye_num[1] << " "
+//              << cyclye_num[2] << " "
+//              << cyclye_num[3] << std::endl;
+//
+//    auto cycyle_num = std::accumulate(cyclye_num.begin(), cyclye_num.end(), 0U);;
+//    std::cout << "cycle total num: " << cycyle_num << std::endl;
 
 
     auto res_len = res_buff_offset.load();
@@ -731,8 +616,6 @@ int main(int argc, char *argv[]) {
     memcpy(mmap_res, res_data, res_len);
     close(fd);
     munmap(mmap_res, res_len);
-    std::cout << "Export res cost " << Duration(time_begin) << "ms" << std::endl;
-    PerfUtils::PerfRaii::Report();
     return 0;
 }
 

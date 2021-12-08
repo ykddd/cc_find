@@ -20,10 +20,5 @@ git clone
 git submodule init  
 git submodule update  
 bash build.sh  
-bash run.sh /Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/account.csv /Users/ykddd/Desktop/com/CYCLE_DETECT_2021BDCI/data/scale1/transfer.csv ./result.csv
+bash run.sh account.csv transfer.csv ./result.csv
 
-# data process
-
-* get account num
-* get account
-* map account
